@@ -768,7 +768,7 @@ def main(args):
     # A bounded model-loading/inference gate for CI and remote GPU bring-up.
     # This intentionally exercises the same model_load + CascadedServer path as
     # production serving, then exits before opening a network listener.
-    if args.smoke_only:
+    if bool(getattr(args, "smoke_only", 0)):
         print("Smoke-only inference completed; ZMQ listener was not started.")
         return result
 
@@ -802,8 +802,9 @@ def main(args):
                           f"(slow={n_slow}, fast={n_fast}, "
                           f"chunk_id={server.chunk_id}). "
                           f"Task: {payload.get('task_description', '')}")
-                if args.max_requests > 0 and step_counter >= args.max_requests:
-                    print(f"Reached max_requests={args.max_requests}; shutting down cleanly.")
+                max_requests = int(getattr(args, "max_requests", 0))
+                if max_requests > 0 and step_counter >= max_requests:
+                    print(f"Reached max_requests={max_requests}; shutting down cleanly.")
                     break
 
             except Exception as e:

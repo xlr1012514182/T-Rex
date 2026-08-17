@@ -115,10 +115,13 @@ class BrainCoSDKBackend:
         self.capability_probe_confirmed = bool(capability_probe_confirmed)
         self._sequence = 0
 
-    async def _call_optional(self, name: str, default: np.ndarray) -> np.ndarray:
+    async def _call_required(self, name: str) -> np.ndarray:
         method = getattr(self.client, name, None)
-        if method is None:
-            return default.copy()
+        if not callable(method):
+            raise AttributeError(
+                f"SDK client has no required {name} method; refusing to "
+                "fabricate Revo telemetry."
+            )
         value = await _maybe_await(method(self.slave_id))
         arr = np.asarray(value)
         if arr.shape != (JOINT_COUNT,):
@@ -147,18 +150,10 @@ class BrainCoSDKBackend:
                         f"expected ({JOINT_COUNT},)."
                     )
         else:
-            positions_deg = await self._call_optional(
-                "revo3_get_all_motor_positions", np.zeros(JOINT_COUNT, dtype=np.float32)
-            )
-            velocities = await self._call_optional(
-                "revo3_get_all_motor_velocities", np.zeros(JOINT_COUNT, dtype=np.float32)
-            )
-            currents = await self._call_optional(
-                "revo3_get_all_motor_currents", np.zeros(JOINT_COUNT, dtype=np.float32)
-            )
-        status = await self._call_optional(
-            "revo3_get_all_motor_status", np.zeros(JOINT_COUNT, dtype=np.int64)
-        )
+            positions_deg = await self._call_required("revo3_get_all_motor_positions")
+            velocities = await self._call_required("revo3_get_all_motor_velocities")
+            currents = await self._call_required("revo3_get_all_motor_currents")
+        status = await self._call_required("revo3_get_all_motor_status")
         if self.feedback_velocity_unit == "rpm":
             velocities_rad_s = velocities * (2.0 * np.pi / 60.0)
         else:
@@ -193,12 +188,16 @@ class BrainCoSDKBackend:
 
     async def collision_active(self) -> bool:
         batch = getattr(self.client, "revo3_get_all_collision_active", None)
-        if batch is not None:
+        if callable(batch):
             values = await _maybe_await(batch(self.slave_id))
             return bool(np.asarray(values, dtype=bool).any())
         per_joint = getattr(self.client, "revo3_is_collision_active", None)
-        if per_joint is None:
-            return False
+        if not callable(per_joint):
+            raise AttributeError(
+                "SDK client exposes neither revo3_get_all_collision_active nor "
+                "revo3_is_collision_active; refusing to treat unknown collision "
+                "state as safe."
+            )
         for joint_id in range(JOINT_COUNT):
             if bool(await _maybe_await(per_joint(self.slave_id, joint_id))):
                 return True

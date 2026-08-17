@@ -102,3 +102,19 @@ def test_hardware_write_stays_blocked_until_capability_probe_is_confirmed():
             await backend.write_command(command)
 
     asyncio.run(run())
+
+
+def test_missing_telemetry_or_collision_api_fails_closed():
+    class MissingTelemetry:
+        pass
+
+    class MissingCollision(_AtomicFakeSDK):
+        revo3_get_all_collision_active = None
+
+    async def run():
+        with pytest.raises(AttributeError, match="refusing to fabricate"):
+            await BrainCoSDKBackend(MissingTelemetry(), slave_id=7).read_state()
+        with pytest.raises(AttributeError, match="unknown collision state"):
+            await BrainCoSDKBackend(MissingCollision(), slave_id=7).collision_active()
+
+    asyncio.run(run())
