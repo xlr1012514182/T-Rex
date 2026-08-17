@@ -99,10 +99,20 @@ class BrainCoSDKBackend:
         *,
         slave_id: int,
         allow_hardware_write: bool = False,
+        feedback_velocity_unit: str = "rpm",
+        feedback_current_unit: str = "mA",
+        capability_probe_confirmed: bool = False,
     ) -> None:
         self.client = client
         self.slave_id = int(slave_id)
         self.allow_hardware_write = bool(allow_hardware_write)
+        if feedback_velocity_unit not in {"rpm", "deg/s"}:
+            raise ValueError("feedback_velocity_unit must be 'rpm' or 'deg/s'.")
+        if feedback_current_unit not in {"mA", "A"}:
+            raise ValueError("feedback_current_unit must be 'mA' or 'A'.")
+        self.feedback_velocity_unit = feedback_velocity_unit
+        self.feedback_current_unit = feedback_current_unit
+        self.capability_probe_confirmed = bool(capability_probe_confirmed)
         self._sequence = 0
 
     async def _call_optional(self, name: str, default: np.ndarray) -> np.ndarray:
@@ -116,33 +126,64 @@ class BrainCoSDKBackend:
         return arr
 
     async def read_state(self) -> RevoState:
-        positions_deg = await self._call_optional(
-            "revo3_get_all_motor_positions", np.zeros(JOINT_COUNT, dtype=np.float32)
-        )
-        velocities_deg_s = await self._call_optional(
-            "revo3_get_all_motor_velocities", np.zeros(JOINT_COUNT, dtype=np.float32)
-        )
-        currents_ma = await self._call_optional(
-            "revo3_get_all_motor_currents", np.zeros(JOINT_COUNT, dtype=np.float32)
-        )
+        # The official SDK exposes a coherent Revo3MotorStatusData call.  Use
+        # it when available rather than composing position/velocity/current
+        # values acquired at three different instants.  Older wrappers are
+        # supported only as an explicit fallback.
+        read_all = getattr(self.client, "revo3_get_motor_status_data", None)
+        if read_all is not None:
+            sample = await _maybe_await(read_all(self.slave_id))
+            positions_deg = np.asarray(sample.positions, dtype=np.float32)
+            velocities = np.asarray(sample.velocities, dtype=np.float32)
+            currents = np.asarray(sample.currents, dtype=np.float32)
+            for name, values in (
+                ("positions", positions_deg),
+                ("velocities", velocities),
+                ("currents", currents),
+            ):
+                if values.shape != (JOINT_COUNT,):
+                    raise ValueError(
+                        f"SDK motor status {name} has shape {values.shape}; "
+                        f"expected ({JOINT_COUNT},)."
+                    )
+        else:
+            positions_deg = await self._call_optional(
+                "revo3_get_all_motor_positions", np.zeros(JOINT_COUNT, dtype=np.float32)
+            )
+            velocities = await self._call_optional(
+                "revo3_get_all_motor_velocities", np.zeros(JOINT_COUNT, dtype=np.float32)
+            )
+            currents = await self._call_optional(
+                "revo3_get_all_motor_currents", np.zeros(JOINT_COUNT, dtype=np.float32)
+            )
         status = await self._call_optional(
             "revo3_get_all_motor_status", np.zeros(JOINT_COUNT, dtype=np.int64)
         )
+        if self.feedback_velocity_unit == "rpm":
+            velocities_rad_s = velocities * (2.0 * np.pi / 60.0)
+        else:
+            velocities_rad_s = np.deg2rad(velocities)
+        if self.feedback_current_unit == "mA":
+            currents_a = currents / 1000.0
+        else:
+            currents_a = currents
         self._sequence += 1
         return RevoState(
             timestamp_ns=time.monotonic_ns(),
             q_rad=np.deg2rad(positions_deg).astype(np.float32),
-            dq_rad_s=np.deg2rad(velocities_deg_s).astype(np.float32),
-            current_a=(currents_ma.astype(np.float32) / 1000.0),
+            dq_rad_s=velocities_rad_s.astype(np.float32),
+            current_a=currents_a.astype(np.float32),
             status=status.astype(np.int64),
             sequence=self._sequence,
         )
 
     async def write_command(self, command: RevoCommand) -> None:
-        if not self.allow_hardware_write:
+        if not self.allow_hardware_write or not self.capability_probe_confirmed:
             raise HardwareWriteNotArmed(
-                "Real Revo write blocked. Construct BrainCoSDKBackend with "
-                "allow_hardware_write=True only after the hardware safety gate passes."
+                "Real Revo write blocked. Set allow_hardware_write=True and "
+                "capability_probe_confirmed=True only after verifying the actual "
+                "Revo feedback units, joint order, limits, status freshness, and "
+                "collision/SoftStop path on the bench."
             )
         method = getattr(self.client, "revo3_set_all_motor_positions", None)
         if method is None:

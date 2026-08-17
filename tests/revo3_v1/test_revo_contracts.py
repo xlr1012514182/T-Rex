@@ -45,17 +45,29 @@ class _FakeSDK:
         return [False] * 21
 
 
+class _Status:
+    positions = [180.0] * 21
+    velocities = [90.0] * 21
+    currents = [500.0] * 21
+
+
+class _AtomicFakeSDK(_FakeSDK):
+    def revo3_get_motor_status_data(self, slave_id):
+        assert slave_id == 7
+        return _Status()
+
+
 def test_joint_order_is_frozen_and_hashed():
     assert JOINT_ORDER == EXPECTED_ORDER
     assert len(JOINT_ORDER_HASH) == 64
 
 
-def test_sdk_boundary_converts_degrees_and_milliamps_to_si():
+def test_sdk_boundary_converts_degrees_rpm_and_milliamps_to_si():
     async def run():
-        backend = BrainCoSDKBackend(_FakeSDK(), slave_id=7)
+        backend = BrainCoSDKBackend(_AtomicFakeSDK(), slave_id=7)
         state = await backend.read_state()
         np.testing.assert_allclose(state.q_rad, np.pi)
-        np.testing.assert_allclose(state.dq_rad_s, np.pi / 2)
+        np.testing.assert_allclose(state.dq_rad_s, 3 * np.pi)
         np.testing.assert_allclose(state.current_a, 0.5)
 
     asyncio.run(run())
@@ -68,9 +80,25 @@ def test_real_write_requires_explicit_arm_and_converts_back_to_degrees():
         backend = BrainCoSDKBackend(sdk, slave_id=7)
         with pytest.raises(HardwareWriteNotArmed):
             await backend.write_command(command)
-        armed = BrainCoSDKBackend(sdk, slave_id=7, allow_hardware_write=True)
+        armed = BrainCoSDKBackend(
+            sdk,
+            slave_id=7,
+            allow_hardware_write=True,
+            capability_probe_confirmed=True,
+        )
         await armed.write_command(command)
         assert sdk.written[0] == 7
         np.testing.assert_allclose(sdk.written[1], 90.0, atol=1e-5)
+
+    asyncio.run(run())
+
+
+def test_hardware_write_stays_blocked_until_capability_probe_is_confirmed():
+    async def run():
+        sdk = _FakeSDK()
+        command = RevoCommand(1, np.zeros(21), "task", 0)
+        backend = BrainCoSDKBackend(sdk, slave_id=7, allow_hardware_write=True)
+        with pytest.raises(HardwareWriteNotArmed, match="capability_probe_confirmed"):
+            await backend.write_command(command)
 
     asyncio.run(run())

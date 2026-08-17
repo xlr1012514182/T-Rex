@@ -10,6 +10,12 @@ import numpy as np
 from .contracts import JOINT_COUNT, RevoState, assert_joint_vector
 
 
+# Official Revo3 u16 motor status error bits: over-current, over/under-voltage,
+# over-temperature, current spike, and stalled.  Bit 11 means Running and is
+# intentionally not an error.  See BrainCo REVO3_MOTOR_API.md.
+REVO3_FAULT_STATUS_MASK = sum(1 << bit for bit in (0, 1, 2, 3, 4, 8))
+
+
 def _array21(value: float | Iterable[float], *, name: str) -> np.ndarray:
     if np.isscalar(value):
         return np.full(JOINT_COUNT, float(value), dtype=np.float32)
@@ -25,6 +31,7 @@ class SafetyEnvelope:
     max_step_rad: np.ndarray
     max_state_age_ns: int = 50_000_000
     max_abs_current_a: np.ndarray | float = 1000.0
+    fault_status_mask: int = REVO3_FAULT_STATUS_MASK
 
     def __post_init__(self) -> None:
         q_min = assert_joint_vector(self.q_min_rad, name="q_min_rad")
@@ -39,6 +46,8 @@ class SafetyEnvelope:
             raise ValueError("Every max_abs_current_a must be positive.")
         if self.max_state_age_ns <= 0:
             raise ValueError("max_state_age_ns must be positive.")
+        if not 0 <= int(self.fault_status_mask) <= 0xFFFF:
+            raise ValueError("fault_status_mask must be a u16 bitmask.")
         object.__setattr__(self, "q_min_rad", q_min)
         object.__setattr__(self, "q_max_rad", q_max)
         object.__setattr__(self, "max_step_rad", max_step)
@@ -114,6 +123,8 @@ class SafetySupervisor:
             hard_reasons.append("invalid_command_lease")
         if np.any(np.abs(state.current_a) > self.envelope.max_abs_current_a):
             hard_reasons.append("over_current")
+        if np.any(np.bitwise_and(state.status, self.envelope.fault_status_mask) != 0):
+            hard_reasons.append("motor_fault_or_stall")
 
         if hard_reasons:
             suffix = f":{context.reason}" if context.reason else ""

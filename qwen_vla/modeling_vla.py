@@ -59,6 +59,7 @@ class Qwen3VLVLAModel(nn.Module):
         action_dim: int = 29,
         action_chunk:        int   = 8,
         tacf6_dim:           int   = 6,
+        tactile_num_fingers: int   = 10,
         use_tactile_deform:  bool  = False,
         use_robot_state:     bool  = False,
         image_token_id:      int   = _DEFAULT_IMAGE_TOKEN_ID,
@@ -76,6 +77,9 @@ class Qwen3VLVLAModel(nn.Module):
         self.action_dim         = action_dim
         self.action_chunk       = action_chunk
         self.tacf6_dim          = tacf6_dim
+        if tactile_num_fingers <= 0:
+            raise ValueError("tactile_num_fingers must be positive")
+        self.tactile_num_fingers = int(tactile_num_fingers)
         self.use_tactile_deform = use_tactile_deform
         self.use_robot_state    = use_robot_state
         self.image_token_id     = image_token_id
@@ -134,14 +138,18 @@ class Qwen3VLVLAModel(nn.Module):
             self.tactile_vqvae.eval()
             for p in self.tactile_vqvae.parameters():
                 p.requires_grad = False
-            # F6 min-max normalization stats ([60] = 10 fingers × 6 dims),
+            # F6 min-max normalization stats.  Upstream T-Rex uses 10
+            # fingertip streams (two hands); Revo 3 uses five (one hand).
+            # The count is checkpointed so a shape mismatch cannot silently
+            # pad or discard a hand at deployment.
+            tactile_stats_dim = self.tactile_num_fingers * self.tacf6_dim
             # registered as buffers so they travel with the checkpoint.
             self.register_buffer("tacf6_vqvae_min",
-                                 torch.zeros(60, dtype=torch.float32), persistent=True)
+                                 torch.zeros(tactile_stats_dim, dtype=torch.float32), persistent=True)
             self.register_buffer("tacf6_vqvae_max",
-                                 torch.ones(60, dtype=torch.float32), persistent=True)
+                                 torch.ones(tactile_stats_dim, dtype=torch.float32), persistent=True)
             self.register_buffer("tacf6_vqvae_mask",
-                                 torch.ones(60, dtype=torch.bool), persistent=True)
+                                 torch.ones(tactile_stats_dim, dtype=torch.bool), persistent=True)
 
         if use_robot_state:
             self.state_embedder = ActionEmbedder(action_dim, H)
@@ -165,6 +173,7 @@ class Qwen3VLVLAModel(nn.Module):
         action_dim:         int  = 29,
         action_chunk:       int  = 8,
         tacf6_dim:          int  = 6,
+        tactile_num_fingers: int = 10,
         use_tactile_deform: bool = False,
         use_robot_state:    bool = False,
         torch_dtype              = torch.bfloat16,
@@ -210,6 +219,7 @@ class Qwen3VLVLAModel(nn.Module):
             action_dim = action_dim,
             action_chunk = action_chunk,
             tacf6_dim = tacf6_dim,
+            tactile_num_fingers = tactile_num_fingers,
             use_tactile_deform = use_tactile_deform,
             use_robot_state = use_robot_state,
             image_token_id = image_token_id,
@@ -320,9 +330,30 @@ class Qwen3VLVLAModel(nn.Module):
         if unexpected:
             print(f"  [tactile_vqvae] unexpected keys: {unexpected[:6]} ...")
         stats = blob["stats"]
-        self.tacf6_vqvae_min.copy_(torch.as_tensor(stats["tacf6_min"], dtype=torch.float32))
-        self.tacf6_vqvae_max.copy_(torch.as_tensor(stats["tacf6_max"], dtype=torch.float32))
-        self.tacf6_vqvae_mask.copy_(torch.as_tensor(stats["tacf6_mask"], dtype=torch.bool))
+        minimum = torch.as_tensor(stats["tacf6_min"], dtype=torch.float32)
+        maximum = torch.as_tensor(stats["tacf6_max"], dtype=torch.float32)
+        mask = torch.as_tensor(stats["tacf6_mask"], dtype=torch.bool)
+        expected = self.tactile_num_fingers * self.tacf6_dim
+        fingers_per_group = int(getattr(self.tactile_vqvae.cfg, "n_fingers", 5))
+        per_group = fingers_per_group * self.tacf6_dim
+        valid_sizes = {expected, per_group}
+        if minimum.numel() not in valid_sizes or maximum.numel() not in valid_sizes or mask.numel() not in valid_sizes:
+            raise ValueError(
+                "VQ-VAE F6 statistics do not match this hand contract: "
+                f"expected {expected} full-hand values or {per_group} shared per-group values, "
+                f"received {minimum.numel()}/{maximum.numel()}/{mask.numel()}. "
+                "Train or convert a Revo-specific tactile tokenizer; implicit zero-padding is forbidden."
+            )
+        if minimum.numel() == per_group and per_group != expected:
+            groups = self.tactile_num_fingers // fingers_per_group
+            if groups * fingers_per_group != self.tactile_num_fingers:
+                raise ValueError("tactile fingers are incompatible with VQ-VAE grouping")
+            minimum = minimum.repeat(groups)
+            maximum = maximum.repeat(groups)
+            mask = mask.repeat(groups)
+        self.tacf6_vqvae_min.copy_(minimum)
+        self.tacf6_vqvae_max.copy_(maximum)
+        self.tacf6_vqvae_mask.copy_(mask)
         self.tactile_vqvae.eval()
         for p in self.tactile_vqvae.parameters():
             p.requires_grad = False
@@ -335,7 +366,8 @@ class Qwen3VLVLAModel(nn.Module):
     def encode_tactile_f6_history(self, f6_history_raw: torch.Tensor) -> torch.Tensor:
         """Encode a raw (un-normalized) F6 history window into per-hand codes.
 
-        f6_history_raw : [B, T, 10, 6]  (two hands × 5 fingers; T = VQ-VAE window).
+        f6_history_raw : [B, T, F, 6], where F is the checkpointed
+                         ``tactile_num_fingers`` (10 upstream; 5 for Revo 3).
                          Normalized internally with the embedded VQ-VAE stats,
                          so callers pass raw F6 — exactly what the dataloader /
                          robot reads off the sensor.
@@ -353,6 +385,12 @@ class Qwen3VLVLAModel(nn.Module):
         w_dtype = next(vq.parameters()).dtype
         x = f6_history_raw.to(device=self.tacf6_vqvae_min.device, dtype=torch.float32)
         B, T, NF, D = x.shape
+        if NF != self.tactile_num_fingers or D != self.tacf6_dim:
+            raise ValueError(
+                "raw F6 history shape does not match checkpoint contract: "
+                f"expected [B,T,{self.tactile_num_fingers},{self.tacf6_dim}], "
+                f"received {tuple(x.shape)}"
+            )
         # Min-max normalize to [-1, 1] (matches TacF6Stats.normalize).
         flat = x.reshape(B, T, NF * D)                                  # [B, T, 60]
         denom = (self.tacf6_vqvae_max - self.tacf6_vqvae_min) + 1e-8
@@ -361,10 +399,16 @@ class Qwen3VLVLAModel(nn.Module):
         normed = torch.where(self.tacf6_vqvae_mask, normed, flat)
         normed = normed.reshape(B, T, NF, D)
 
-        n_hands = NF // 5
+        fingers_per_group = int(getattr(vq.cfg, "n_fingers", 5))
+        if NF % fingers_per_group:
+            raise ValueError(
+                f"{NF} tactile fingers cannot be grouped by VQ-VAE n_fingers="
+                f"{fingers_per_group}"
+            )
+        n_hands = NF // fingers_per_group
         per_hand_codes = []
         for h in range(n_hands):
-            wh = normed[:, :, h * 5:(h + 1) * 5, :].to(w_dtype)         # [B, T, 5, 6]
+            wh = normed[:, :, h * fingers_per_group:(h + 1) * fingers_per_group, :].to(w_dtype)
             idx = vq.encode(wh)                                          # [B] or [B, 5]
             if idx.dim() == 1:
                 idx = idx.unsqueeze(1)                                   # [B, 1]

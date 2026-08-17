@@ -140,6 +140,20 @@ class SftDataset(Dataset):
         self.tacf6_mask  = _arr("tactile_f6", "mask")
         self.tacf6_min   = _arr("tactile_f6", "q01")
         self.tacf6_max   = _arr("tactile_f6", "q99")
+        self.tactile_num_fingers = int(getattr(config, "tactile_num_fingers", 10))
+        expected_tactile_dim = self.tactile_num_fingers * 6
+        for name, values in (
+            ("mask", self.tacf6_mask),
+            ("q01", self.tacf6_min),
+            ("q99", self.tacf6_max),
+        ):
+            if np.asarray(values).size != expected_tactile_dim:
+                raise ValueError(
+                    f"tactile_f6 {name} has {np.asarray(values).size} values; "
+                    f"expected {expected_tactile_dim} for "
+                    f"tactile_num_fingers={self.tactile_num_fingers}. "
+                    "Implicit hand padding is not allowed."
+                )
 
         # Tracking error stats for state noise injection (used when use_robot_state=1)
         # Dimension: 28D per arm (6 arm + 22 hand), scales with n_arms
@@ -164,7 +178,7 @@ class SftDataset(Dataset):
         # alignment as utils/encode_vqvae_codes_to_json.py).
         self.use_tactile_vqvae = bool(getattr(config, "use_tactile_vqvae", 0))
         self.vqvae_window = int(getattr(config, "vqvae_window", 16))
-        self._ep_f6 = {}        # ep_dir -> np.ndarray [N_ep, 10, 6]
+        self._ep_f6 = {}        # episode -> np.ndarray [N_ep, F, 6]
         self._f6_loc = {}       # (ep_dir, frame) -> position in that episode
         if self.use_tactile_vqvae:
             self._build_f6_history_index()
@@ -175,18 +189,23 @@ class SftDataset(Dataset):
         """Group per-sample tactile_f6 by episode (sorted by frame) so a sample
         at frame f can fetch the previous `window` F6 frames (left-padded)."""
         frame_re = re.compile(r"(.+/episode_\d+)/image(\d+)_")
-        by_ep = {}  # ep_dir -> list of (frame, f6[10,6])
+        by_ep = {}  # episode -> list of (frame, f6[F,6])
         n = len(self.hf_dataset)
         for i in range(n):
             s = self.hf_dataset[i]
             deforms = s.get("tactile_image_deform", []) or []
-            if not deforms:
-                continue
-            m = frame_re.search(deforms[0])
-            if not m:
-                continue
-            ep_dir, frame = m.group(1), int(m.group(2))
-            f6 = np.asarray(s["tactile_f6"], dtype=np.float32).reshape(10, 6)
+            if s.get("episode_id") is not None and s.get("frame_index") is not None:
+                ep_dir, frame = str(s["episode_id"]), int(s["frame_index"])
+            else:
+                if not deforms:
+                    continue
+                m = frame_re.search(deforms[0])
+                if not m:
+                    continue
+                ep_dir, frame = m.group(1), int(m.group(2))
+            f6 = np.asarray(s["tactile_f6"], dtype=np.float32).reshape(
+                self.tactile_num_fingers, 6
+            )
             by_ep.setdefault(ep_dir, []).append((frame, f6))
         for ep_dir, items in by_ep.items():
             items.sort(key=lambda t: t[0])
@@ -198,7 +217,7 @@ class SftDataset(Dataset):
             f"window={self.vqvae_window}")
 
     def _f6_history_for_sample(self, sample) -> np.ndarray:
-        """Return the raw [window, 10, 6] F6 history ending at this sample.
+        """Return the raw [window, F, 6] F6 history ending at this sample.
 
         Mirrors utils/encode_vqvae_codes_to_json._build_windows: the previous
         `window` samples in episode order, left-edge-padded with the episode's
@@ -208,11 +227,16 @@ class SftDataset(Dataset):
         W = self.vqvae_window
         frame_re = re.compile(r"(.+/episode_\d+)/image(\d+)_")
         deforms = sample.get("tactile_image_deform", []) or []
-        cur = np.asarray(sample["tactile_f6"], dtype=np.float32).reshape(1, 10, 6)
-        m = frame_re.search(deforms[0]) if deforms else None
-        if m is None:
-            return np.repeat(cur, W, axis=0)
-        ep_dir, frame = m.group(1), int(m.group(2))
+        cur = np.asarray(sample["tactile_f6"], dtype=np.float32).reshape(
+            1, self.tactile_num_fingers, 6
+        )
+        if sample.get("episode_id") is not None and sample.get("frame_index") is not None:
+            ep_dir, frame = str(sample["episode_id"]), int(sample["frame_index"])
+        else:
+            m = frame_re.search(deforms[0]) if deforms else None
+            if m is None:
+                return np.repeat(cur, W, axis=0)
+            ep_dir, frame = m.group(1), int(m.group(2))
         pos = self._f6_loc.get((ep_dir, frame))
         arr = self._ep_f6.get(ep_dir)
         if pos is None or arr is None:
@@ -235,14 +259,32 @@ class SftDataset(Dataset):
         return len(self.hf_dataset)
 
     def create_val_split(self, val_ratio=0.05, seed=42):
-        """Split the dataset into train/val. Returns a new SftDataset for val."""
+        """Split train/val, grouping by episode when ``episode_id`` exists."""
         import copy
         n = len(self.hf_dataset)
-        n_val = max(1, int(n * val_ratio))
         rng = np.random.RandomState(seed)
-        perm = rng.permutation(n)
-        val_indices = sorted(perm[:n_val].tolist())
-        train_indices = sorted(perm[n_val:].tolist())
+        episode_ids = [self.hf_dataset[i].get("episode_id") for i in range(n)]
+        if n and all(value is not None for value in episode_ids):
+            unique_episodes = sorted({str(value) for value in episode_ids})
+            if len(unique_episodes) < 2:
+                raise ValueError("Episode-grouped validation requires at least two episodes")
+            permuted = rng.permutation(unique_episodes)
+            n_val_episodes = min(
+                len(unique_episodes) - 1,
+                max(1, int(round(len(unique_episodes) * val_ratio))),
+            )
+            val_episode_set = set(permuted[:n_val_episodes].tolist())
+            val_indices = [
+                i for i, value in enumerate(episode_ids) if str(value) in val_episode_set
+            ]
+            train_indices = [
+                i for i, value in enumerate(episode_ids) if str(value) not in val_episode_set
+            ]
+        else:
+            n_val = max(1, int(n * val_ratio))
+            perm = rng.permutation(n)
+            val_indices = sorted(perm[:n_val].tolist())
+            train_indices = sorted(perm[n_val:].tolist())
 
         val_ds = copy.copy(self)
         val_ds.hf_dataset = self.hf_dataset.select(val_indices)
@@ -504,6 +546,7 @@ def save_checkpoint(model, processor, accelerator, args, epoch, global_step, sta
                 "model_path": args.model_path,
                 "action_dim": args.action_dim,
                 "action_chunk": args.action_chunk,
+                "tactile_num_fingers": getattr(args, "tactile_num_fingers", 10),
                 "use_robot_state": args.use_robot_state,
                 "use_tactile_deform": args.use_tactile_deform,
                 "use_tactile_vec": getattr(args, "use_tactile_vec", 0),
@@ -785,6 +828,7 @@ def train(args):
         pretrained_path=args.model_path,
         action_dim=args.action_dim,
         action_chunk=args.action_chunk,
+        tactile_num_fingers=args.tactile_num_fingers,
         use_tactile_deform=bool(args.use_tactile_deform),
         use_robot_state=bool(args.use_robot_state),
         torch_dtype=torch.bfloat16,
@@ -1256,6 +1300,10 @@ if __name__ == "__main__":
 
     parser.add_argument("--action_dim", type=int, default=31)
     parser.add_argument("--action_chunk", type=int, default=8)
+    parser.add_argument(
+        "--tactile_num_fingers", type=int, default=10,
+        help="Number of tactile fingertip feature streams. Upstream T-Rex=10; Revo3 single hand=5.",
+    )
     parser.add_argument("--use_robot_state", type=int, default=0)
     parser.add_argument("--use_tactile_vec", type=int, default=0)
     parser.add_argument("--use_tactile_deform", type=int, default=1)

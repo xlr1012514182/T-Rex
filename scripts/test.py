@@ -85,6 +85,7 @@ def _build_qwen3vl_from_config(config_path, args):
         config             = text_config,
         action_dim         = args.action_dim,
         action_chunk       = args.action_chunk,
+        tactile_num_fingers= args.tactile_num_fingers,
         use_tactile_deform = bool(args.use_tactile_deform),
         use_robot_state    = bool(args.use_robot_state),
         image_token_id     = image_token_id,
@@ -158,7 +159,13 @@ def model_load(args):
     if os.path.exists(ta_path):
         with open(ta_path) as f:
             ta = json.load(f)
-        for key, default in [("tactile_intermediate_size", 0),
+        for key, default in [("action_dim", 31),
+                             ("action_chunk", 8),
+                             ("use_robot_state", 0),
+                             ("use_tactile_deform", 1),
+                             ("use_tactile_vec", 0),
+                             ("tactile_intermediate_size", 0),
+                             ("tactile_num_fingers", 10),
                              ("n_flare_tokens_per_frame", 0),
                              ("n_flare_steps", 0),
                              ("use_tactile_code", 0),
@@ -168,7 +175,7 @@ def model_load(args):
                              ("cascaded_split_step", 6)]:
             saved = ta.get(key, default)
             cli_val = getattr(args, key, default)
-            if saved and cli_val == default:
+            if key in ta and cli_val == default:
                 setattr(args, key, saved)
                 print(f"Auto-detected {key}={saved} from training_args.json")
         # vqvae_config is a dict — restore it verbatim so the embedded VQ-VAE
@@ -193,6 +200,7 @@ def model_load(args):
         model = Qwen3VLVLAModel.from_pretrained_qwen3vl(
             pretrained_path=base_model_path,
             action_dim=args.action_dim, action_chunk=args.action_chunk,
+            tactile_num_fingers=args.tactile_num_fingers,
             use_tactile_deform=bool(args.use_tactile_deform),
             use_robot_state=bool(args.use_robot_state),
             torch_dtype=torch.bfloat16,
@@ -217,6 +225,7 @@ def model_load(args):
         model = Qwen3VLVLAModel.from_pretrained_qwen3vl(
             pretrained_path=pretrained_path,
             action_dim=args.action_dim, action_chunk=args.action_chunk,
+            tactile_num_fingers=args.tactile_num_fingers,
             use_tactile_deform=bool(args.use_tactile_deform),
             use_robot_state=bool(args.use_robot_state),
             torch_dtype=torch.bfloat16,
@@ -273,6 +282,15 @@ def model_load(args):
         "tacf6_min":   _arr("tactile_f6", "q01"),
         "tacf6_max":   _arr("tactile_f6", "q99"),
     }
+    expected_tactile_dim = int(args.tactile_num_fingers) * 6
+    if any(np.asarray(statistic[key]).size != expected_tactile_dim for key in (
+        "tacf6_mask", "tacf6_min", "tacf6_max"
+    )):
+        raise ValueError(
+            "Checkpoint tactile statistics do not match "
+            f"tactile_num_fingers={args.tactile_num_fingers}; "
+            "implicit hand padding is forbidden"
+        )
     if args.use_robot_state:
         statistic["state_mask"] = _arr("state", "mask")
         statistic["state_min"]  = _arr("state", "q01")
@@ -346,6 +364,7 @@ class CascadedServer:
 
     def __init__(self, args, model, processor, statistic):
         self.args      = args
+        self.tactile_num_fingers = int(args.tactile_num_fingers)
         self.model     = model
         self.processor = processor
         self.statistic = statistic
@@ -381,7 +400,7 @@ class CascadedServer:
         self.vqvae_model    = None
         self.vqvae_stats    = None
         self.vqvae_window   = 16
-        self.f6_buffer: list = []                  # list of [10, 6] np arrays
+        self.f6_buffer: list = []                  # list of [F, 6] np arrays
         self.use_embedded_vqvae = bool(
             getattr(model, "use_tactile_vqvae", False)
             and getattr(model, "tactile_vqvae", None) is not None)
@@ -418,7 +437,7 @@ class CascadedServer:
                 head = np.repeat(arr[:1], w - arr.shape[0], axis=0)
                 arr = np.concatenate([head, arr], axis=0)
         else:
-            f6 = arr.reshape(10, 6)
+            f6 = arr.reshape(self.tactile_num_fingers, 6)
             self.f6_buffer.append(f6)
             if len(self.f6_buffer) > w:
                 self.f6_buffer = self.f6_buffer[-w:]
@@ -462,13 +481,19 @@ class CascadedServer:
         is_per_finger = getattr(self.vqvae_model.cfg, "granularity", "hand") == "finger"
         n_fingers = int(getattr(self.vqvae_model.cfg, "n_fingers", 5)) if is_per_finger else 1
 
+        if self.tactile_num_fingers % n_fingers:
+            raise ValueError(
+                f"tactile_num_fingers={self.tactile_num_fingers} is not divisible "
+                f"by VQ-VAE n_fingers={n_fingers}"
+            )
+        n_groups = self.tactile_num_fingers // n_fingers
         if is_per_finger:
-            codes = np.zeros((2, n_fingers), dtype=np.int64)     # [2, 5]
+            codes = np.zeros((n_groups, n_fingers), dtype=np.int64)
         else:
-            codes = np.zeros(2, dtype=np.int64)                  # [2]
+            codes = np.zeros(n_groups, dtype=np.int64)
 
-        for hand in (0, 1):
-            wh = arr_n[:, hand * 5: (hand + 1) * 5, :]           # [W, 5, 6]
+        for hand in range(n_groups):
+            wh = arr_n[:, hand * n_fingers: (hand + 1) * n_fingers, :]
             t = torch.from_numpy(wh).unsqueeze(0).to(self.device)
             with torch.no_grad():
                 idx = self.vqvae_model.encode(t).cpu().numpy()   # [1] or [1, 5]
@@ -720,8 +745,8 @@ def main(args):
     n_fast_cams = 2 if args.action_dim > 31 else 1
     dummy_fast  = [Image.new("RGB", (224, 224), color="black") for _ in range(n_fast_cams)]
     dummy_state = np.zeros(args.action_dim, dtype=np.float32) if args.use_robot_state else None
-    dummy_f6    = np.zeros((5, 6), dtype=np.float32) if args.use_tactile_vec else None
-    dummy_deform = np.zeros((5, 240, 240), dtype=np.float32) if args.use_tactile_deform else None
+    dummy_f6    = np.zeros((args.tactile_num_fingers, 6), dtype=np.float32) if args.use_tactile_vec else None
+    dummy_deform = np.zeros((args.tactile_num_fingers, 240, 240), dtype=np.float32) if args.use_tactile_deform else None
 
     server = CascadedServer(args, model, processor, statistic)
     # Warm-up: run one slow_and_fast and discard
@@ -789,6 +814,10 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_name", type=str, default="")
     parser.add_argument("--action_dim", type=int, default=31)
     parser.add_argument("--action_chunk", type=int, default=8)
+    parser.add_argument(
+        "--tactile_num_fingers", type=int, default=10,
+        help="Number of tactile feature streams; set 5 for a Revo3 single hand.",
+    )
     parser.add_argument("--use_robot_state", type=int, default=0)
     parser.add_argument("--use_tactile_deform", type=int, default=1)
     parser.add_argument("--use_tactile_vec", type=int, default=0)

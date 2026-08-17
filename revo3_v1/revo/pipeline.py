@@ -9,6 +9,8 @@ import numpy as np
 
 from .backend import RevoBackend
 from .contracts import RevoCommand, RevoState, assert_joint_vector
+from dataclasses import replace
+
 from .safety import SafetyContext, SafetyResult, SafetySupervisor
 
 
@@ -34,6 +36,16 @@ class RevoCommandPipeline:
     ) -> SafetyResult:
         now = time.monotonic_ns() if now_ns is None else int(now_ns)
         observed = await self.backend.read_state() if state is None else state
+        # Single-command SDK writes do not run a hidden telemetry/collision
+        # loop.  The repository-owned writer therefore polls collision state
+        # on every command and merges it into the final safety context.
+        collision_active = await self.backend.collision_active()
+        if collision_active and not safety_context.collision_active:
+            safety_context = replace(
+                safety_context,
+                collision_active=True,
+                reason=safety_context.reason or "backend_collision_active",
+            )
         nominal = assert_joint_vector(nominal_q_rad, name="nominal_q_rad")
         residual = (
             np.zeros_like(nominal)

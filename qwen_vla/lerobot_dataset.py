@@ -103,6 +103,7 @@ class TRexLeRobotDataset(torch.utils.data.Dataset):
         self.use_robot_state = bool(getattr(config, "use_robot_state", 0))
         self.vqvae_window = int(getattr(config, "vqvae_window", 16))
         self.action_dim = int(getattr(config, "action_dim", ACTION_DIM))
+        self.tactile_num_fingers = int(getattr(config, "tactile_num_fingers", 10))
 
         # ── normalization stats (q01/q99 sidecar) ──
         self.stats_data = _stats if _stats is not None else load_norm_stats(root)
@@ -113,6 +114,15 @@ class TRexLeRobotDataset(torch.utils.data.Dataset):
         self.state_mask  = _arr("state", "mask");  self.state_min  = _arr("state", "q01");  self.state_max  = _arr("state", "q99")
         if self.has_tactile:
             self.tacf6_mask = _arr("tactile_f6", "mask"); self.tacf6_min = _arr("tactile_f6", "q01"); self.tacf6_max = _arr("tactile_f6", "q99")
+            expected_tactile_dim = self.tactile_num_fingers * 6
+            if any(np.asarray(x).size != expected_tactile_dim for x in (
+                self.tacf6_mask, self.tacf6_min, self.tacf6_max
+            )):
+                raise ValueError(
+                    "LeRobot tactile statistics do not match "
+                    f"tactile_num_fingers={self.tactile_num_fingers}; "
+                    "implicit one/two-hand conversion is forbidden"
+                )
         te = block.get("tracking_error", {})
         te_dim = (self.action_dim // 31) * 28
         self.te_mean = np.array(te.get("mean", np.zeros(te_dim)), dtype=np.float32)
@@ -203,11 +213,16 @@ class TRexLeRobotDataset(torch.utils.data.Dataset):
         norm_tacf6 = None
         tactile_f6_history_tensor = None
         if self.has_tactile and KEY_TACF6 in batch[0]:
-            f6_hist = torch.stack([x[KEY_TACF6].float() for x in batch], dim=0)   # [B,W,10,6]
+            f6_hist = torch.stack([x[KEY_TACF6].float() for x in batch], dim=0)
+            if tuple(f6_hist.shape[-2:]) != (self.tactile_num_fingers, 6):
+                raise ValueError(
+                    f"Expected tactile history [...,{self.tactile_num_fingers},6], "
+                    f"received {tuple(f6_hist.shape)}"
+                )
             if self.use_tactile_vqvae:
                 tactile_f6_history_tensor = f6_hist                              # raw, model normalizes
             if self.use_tactile_vec:
-                cur = f6_hist[:, -1].reshape(B, -1).numpy()                       # current frame [B,60]
+                cur = f6_hist[:, -1].reshape(B, -1).numpy()
                 norm_tacf6 = torch.tensor(
                     _normalize(cur, self.tacf6_mask, self.tacf6_min, self.tacf6_max).reshape(B, -1, 6),
                     dtype=torch.bfloat16)
