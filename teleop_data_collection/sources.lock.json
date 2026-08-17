@@ -1,0 +1,55 @@
+{
+  "schema_version": "revo3-teleop-sources-v1",
+  "sources": [
+    {
+      "name": "brainco_revo3_sdk",
+      "url": "https://github.com/BrainCoTech/brainco-revo3-sdk.git",
+      "commit": "7ba96ebd5bee16b730577e2f7c5df98600da53eb",
+      "license": "NOASSERTION (repository has no root LICENSE at pinned commit)",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Revo3 hardware SDK reference"
+    },
+    {
+      "name": "brainco_revo3_ros2",
+      "url": "https://github.com/BrainCoTech/brainco_revo3_ros2.git",
+      "commit": "67442f2811680f8666b7d51a22398d68a945941e",
+      "license": "Apache-2.0",
+      "redistribution": "external_checkout",
+      "purpose": "Revo3 ROS2 message and controller contract"
+    },
+    {
+      "name": "brainco_retargeting_revo3",
+      "url": "https://github.com/BrainCoTech/Revo-Retargeting.git",
+      "commit": "83087f108b0b853413842e6e185fe4fb509004c5",
+      "branch": "revo3_retargeting",
+      "license": "NOASSERTION (mixed package declarations; MANUS SDK separately licensed)",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Official MANUS-to-Revo3 retargeting workspace"
+    },
+    {
+      "name": "brainco_hand_sdk",
+      "url": "https://github.com/BrainCoTech/brainco-hand-sdk.git",
+      "commit": "5c399113efd35f5ce664d5d8f3e8ff750ced5d23",
+      "license": "MIT",
+      "redistribution": "external_checkout",
+      "purpose": "BrainCo EDU glove and eight-channel EMG acquisition examples"
+    },
+    {
+      "name": "tianji_historical_header_reference",
+      "url": "https://github.com/cynthia-you/TJ_FX_ROBOT_CONTRL_SDK.git",
+      "commit": "747f5d0279a91d85e32d06008665d96886eff438",
+      "license": "Apache-2.0 repository license; author/vendor identity unverified",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Historical MarvinSDK.h semantics cross-check only; not a supported runtime dependency"
+    },
+    {
+      "name": "wuji_hand_teleop_reference",
+      "url": "https://github.com/wuji-technology/wuji-hand-teleop.git",
+      "commit": "647801345a6a27dec5cbf56280ce63bb8b2f6a32",
+      "tag": "v2026.6.13",
+      "license": "MIT for repository source; bundled binary license not verified",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Reference Tianji pose-output integration; binaries are not vendored"
+    }
+  ]
+}

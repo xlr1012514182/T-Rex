@@ -38,6 +38,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools]
 py-modules = []
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "teleop_data_collection/tests"]
+norecursedirs = ["teleop_data_collection/vendor"]
+
 # ── uv: pull the CUDA-12.4 torch wheels from the official PyTorch index ──────
 # `uv sync` / `uv pip install -e .` will resolve torch/torchvision from here.
 # Plain pip on Linux already gets a CUDA-12.4 build for torch 2.6.0 from PyPI;

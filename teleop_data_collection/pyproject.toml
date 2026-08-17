@@ -1,0 +1,29 @@
+[project]
+name = "revo3-teleop-data-collection"
+version = "0.1.0"
+description = "Native-rate, causally aligned Tianji/Revo3/glove/EMG data collection"
+requires-python = "==3.10.*"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "numpy>=1.26,<3",
+    "h5py>=3.11,<4",
+    "pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+camera = ["opencv-python-headless>=4.10,<5"]
+
+[project.scripts]
+revo3-teleop-mock = "revo3_teleop.cli.mock_demo:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", ".."]
+testpaths = ["tests"]

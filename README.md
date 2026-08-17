@@ -69,6 +69,12 @@ tactile-reactive **midtrain** → task-specific **post-train**.
 > [`docs/revo3_v1/README.md`](docs/revo3_v1/README.md). This is a runnable
 > plumbing/component integration, not a real-hardware or task-success claim.
 
+The standalone native-rate glove/EMG/Tianji/Revo collection project is in
+[`teleop_data_collection/README.md`](teleop_data_collection/README.md). It
+includes a four-task mock pipeline, HDF5 episode recorder, controller-boundary
+label lineage, separate Revo VLA and reviewed-EMG exporters, and fail-closed
+SDK adapters.
+
 ## 🤗 Model Zoo
 
 Checkpoints released on the Hugging Face Hub:

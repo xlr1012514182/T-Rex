@@ -1,0 +1,31 @@
+{
+  "schema_version": "revo3-teleop-config-v1",
+  "mode": "hardware",
+  "allow_hardware_write": false,
+  "capability_probe_confirmed": false,
+  "revo": {
+    "slave_id": 1,
+    "feedback_velocity_unit": "REPLACE_AFTER_CAPABILITY_PROBE",
+    "feedback_current_unit": "REPLACE_AFTER_CAPABILITY_PROBE"
+  },
+  "tianji": {
+    "robot_ip": "192.0.2.10",
+    "arm": "right",
+    "joint_order": ["REPLACE_FROM_ACTUAL_SDK_PROBE"],
+    "sdk_position_unit": "deg"
+  },
+  "arm_target_source": {
+    "requires_wrist_pose": true,
+    "provides_wrist_pose": false,
+    "tracker": "REPLACE_WITH_ACTUAL_TRACKER"
+  },
+  "emg": {
+    "channels": 8,
+    "sample_rate_hz": 250,
+    "device_port": "REPLACE_ON_MACHINE"
+  },
+  "notes": [
+    "This file intentionally cannot arm hardware as-is.",
+    "Do not replace capture timestamps with callback receive timestamps without recording the clock provenance."
+  ]
+}
