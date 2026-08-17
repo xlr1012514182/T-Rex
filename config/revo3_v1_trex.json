@@ -1,0 +1,67 @@
+{
+  "schema_version": "revo3-trex-launch-v1",
+  "description": "Fail-fast launch contract for the Revo3 single-hand T-Rex adaptation. This is a Revo-specific cascaded stage-2 run, not a claim that the released T-Rex paper midtrain corpus or protocol was reproduced.",
+  "official_sources": {
+    "main_repository": "https://github.com/ZhuoyangLiu2005/T-Rex",
+    "full_pipeline_branch": "https://github.com/ZhuoyangLiu2005/T-Rex/tree/full-pipeline",
+    "base_model": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct",
+    "primary_pretrain_checkpoint_id": "miniFranka/T-Rex_pretrain_mecka22k_epoch1",
+    "primary_pretrain_checkpoint": "https://huggingface.co/miniFranka/T-Rex_pretrain_mecka22k_epoch1",
+    "midtrain_ablation_checkpoint_id": "miniFranka/T-Rex_midtrain_mecka23k_ucb100_vqvae_epoch6",
+    "midtrain_ablation_checkpoint": "https://huggingface.co/miniFranka/T-Rex_midtrain_mecka23k_ucb100_vqvae_epoch6"
+  },
+  "fixed_contract": {
+    "action_dim": 21,
+    "action_chunk": 16,
+    "tactile_num_fingers": 5,
+    "use_robot_state": 1,
+    "use_tactile_vec": 1,
+    "use_tactile_deform": 0,
+    "use_tactile_vqvae": 0,
+    "use_tactile_code": 0,
+    "emg_in_vla": false
+  },
+  "training": {
+    "n_epochs": 10,
+    "save_freq": 2,
+    "train_bsz_per_gpu": 2,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 0.0001,
+    "min_lr_ratio": 0.0,
+    "warmup_rates": 0.03,
+    "weight_decay": 0.01,
+    "max_grad_norm": 1.0,
+    "seed": 42,
+    "training_stage": 2,
+    "tactile_intermediate_size": 1536,
+    "cascaded_total_steps": 10,
+    "cascaded_split_step": 6,
+    "cascaded_tactile_dropout": 0.1,
+    "cascaded_loss_weight": 1.0,
+    "tactile_loss_weight": 1.0,
+    "use_flare": 0,
+    "n_flare_tokens_per_frame": 0,
+    "n_flare_steps": 0,
+    "flare_loss_weight": 0.0,
+    "flare_frame_stride": 4,
+    "flare_layer_index": -1,
+    "image_size": [384, 288],
+    "val_ratio": 0.1,
+    "val_freq": 500,
+    "max_val_batches": 30
+  },
+  "inference": {
+    "cascaded_total_steps": 10,
+    "cascaded_split_step": 6,
+    "disable_tactile": 0,
+    "image_size": [384, 288]
+  },
+  "limitations": [
+    "Execution requires an independently approved real-robot dataset readiness manifest; synthetic fixtures are rejected.",
+    "The VLA dataset and model contract contain RGB, language, Revo3 state/action, and tactile features only. EMG remains outside T-Rex.",
+    "The current main-branch LeRobot converter is upstream-bimanual (62-D); this launcher accepts the reviewed Revo3 JSON contract only until a dedicated 21-D LeRobot converter passes replay and schema gates.",
+    "The official 10-finger VQ-VAE and deformation encoder are not silently reused for the five-finger Revo3 sensor; continuous calibrated 5x6 tactile features are used.",
+    "The raw released midtrain checkpoint is rejected even in ablation mode. The ablation becomes launchable only after a separately verified Revo3 migration artifact removes the 10-finger embedded VQ path and records all reinitialized shape-mismatched heads.",
+    "FLARE is disabled until Revo3 future-frame lookup and timing have a real-data verification artifact."
+  ]
+}
