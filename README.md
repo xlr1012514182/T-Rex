@@ -64,6 +64,11 @@ tactile-reactive **midtrain** → task-specific **post-train**.
 > midtraining code lives in the [`full-pipeline`](../../tree/full-pipeline) branch;
 > the pretrain/midtrain corpora are not part of this release.
 
+> **Experimental Revo 3 V1 integration:** the single-hand 21-DoF mock/runtime,
+> EMG intent path and Revo training contract are documented in
+> [`docs/revo3_v1/README.md`](docs/revo3_v1/README.md). This is a runnable
+> plumbing/component integration, not a real-hardware or task-success claim.
+
 ## 🤗 Model Zoo
 
 Checkpoints released on the Hugging Face Hub:

@@ -36,7 +36,7 @@ python scripts/revo3_v1_train_emg.py `
   --preset smoke --epochs 3
 ```
 
-Use `--preset gni` for the released 512-channel Conv/512-hidden/three-layer
+Use `--preset gni` for the released 512-output-channel Conv/512-hidden/three-layer
 LSTM dimensions.  The smoke preset retains the same layer topology with small
 dimensions and one LSTM layer.  Real acquisition must replace the synthetic
 NPZ/manifests while preserving `[window, channel, sample]`, label and timestamp

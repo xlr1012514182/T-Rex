@@ -4,9 +4,10 @@
 The launcher deliberately separates command construction from execution.  It
 rejects synthetic data, EMG-bearing VLA records, unapproved action labels, and
 shape-incompatible datasets before it can spawn a multi-GPU process.  The
-primary route resumes the released T-Rex *pretrain* checkpoint; the released
-midtrain checkpoint is available only behind an explicit heterogeneous-hand
-ablation acknowledgement.
+primary route resumes the released T-Rex *pretrain* checkpoint.  A raw
+released midtrain checkpoint is never launchable for Revo3: the optional
+heterogeneous-hand ablation requires both an explicit acknowledgement and a
+separately verified Revo-compatible migration artifact.
 
 This wrapper invokes the locally adapted ``scripts/train.py`` cascaded stage-2
 path.  Upstream ``main`` calls that file post-training code, while upstream's
