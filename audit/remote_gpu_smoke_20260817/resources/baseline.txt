@@ -1,0 +1,6 @@
+ssh_host_key_fingerprint=ssh-ed25519 255 SHA256:liZ36vNCsNcNdXeWs4f+g5ZIhPM/ZihP834vxs8Ulqc
+gpu=0,NVIDIA GeForce RTX 4080 SUPER,32760 MiB total,1 MiB used,32230 MiB free,0 percent utilization
+external_compute_processes=none
+host_memory_mib=total 515617,used 46420,available 464147
+work_disk=/root/autodl-tmp,total 50G,used 4.2G,available 46G
+initial_platform_processes=Jupyter Lab,TensorBoard,platform proxy only; preserved and not modified

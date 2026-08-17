@@ -1,0 +1,27 @@
+Command:
+  py -3.10 E:\CodexData\skills\robotics-repo-reproduction-audit\scripts\audit_reproduction_matrix.py audit\teleop_data_collection_reproduction_matrix.csv --outcome component-verified --require-reviewed --json
+
+Result:
+  rows: 22
+  outcome: component-verified
+  errors: []
+  warnings: []
+  exit code: 0
+
+Command:
+  py -3.10 E:\CodexData\skills\lehome-imitation-data\scripts\audit_dataset_readiness.py audit\teleop_data_collection_mock_dataset_readiness.json --json
+
+Result:
+  ready: true
+  errors: []
+  warnings: []
+  exit code: 0
+
+Interpretation:
+  Component-verified covers local contracts, source-pinned adapters, injected
+  SDK boundaries, fail-closed orchestration, and synthetic causal
+  serialization only. No device was connected. The readiness result validates
+  only the synthetic manifest schema and declared invariants; that manifest
+  explicitly sets training_approved=false, task_success_defined=false, and
+  task-success rates to zero. Real collection, physical replay, training, task
+  success, and clinical claims remain blocked.

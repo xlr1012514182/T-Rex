@@ -1,0 +1,81 @@
+{
+  "claims_excluded": [
+    "paper result reproduction",
+    "planner grounding accuracy",
+    "Revo3 checkpoint compatibility",
+    "physical robot task success",
+    "latency certification",
+    "clinical performance"
+  ],
+  "date": "2026-08-18",
+  "deviations": [
+    "bounded early exit was added after the production warm-up to avoid an infinite ZMQ server",
+    "a task-only wrapper observed load_state_dict results and finite actions without changing weights or production inference",
+    "official dual-hand 62D embodiment was tested; Revo3 21D compatibility was not claimed"
+  ],
+  "outcome": "runnable-smoke-pass",
+  "qwen": {
+    "native_duration_ms": 13331.339219,
+    "native_generation_succeeded": true,
+    "native_schema_failure_reason": "128-token bounded generation ended before JSON completed",
+    "native_schema_valid": false,
+    "peak_gpu_used_mib": 4540,
+    "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+    "strict_duration_ms": 14084.425313,
+    "strict_generation_succeeded": true,
+    "strict_schema_valid": true,
+    "strict_status": "ASK_CLARIFY",
+    "strict_task": null
+  },
+  "schema_version": "revo3-remote-gpu-smoke-summary-v1",
+  "source": {
+    "bounded_smoke_commit": "78cdb7882a2fc2772ca16d24935e5fb1437b536d",
+    "official_trex_commit": "09db9f3b3e3936fb760e67329174bd2bed527a05"
+  },
+  "task_success_defined": false,
+  "trex": {
+    "action_shape": [
+      16,
+      62
+    ],
+    "actions_all_finite": true,
+    "checkpoint_revision": "62efb3bcb45a3df0e088c8909d759b582cfb98af",
+    "host_peak_delta_mib": 25233,
+    "load_state_dict_records": [
+      {
+        "missing_count": 0,
+        "missing_first_20": [],
+        "module_class": "Qwen3VLVLAModel",
+        "source_key_count": 1412,
+        "strict": false,
+        "unexpected_count": 0,
+        "unexpected_first_20": []
+      }
+    ],
+    "mode": "slow_and_fast",
+    "nvidia_peak_used_mib": 8674,
+    "production_path": "scripts/test.py:model_load + CascadedServer.predict(slow_and_fast)",
+    "resolved_args": {
+      "action_chunk": 16,
+      "action_dim": 62,
+      "cascaded_split_step": 6,
+      "cascaded_total_steps": 10,
+      "disable_tactile": 0,
+      "n_flare_steps": 8,
+      "n_flare_tokens_per_frame": 4,
+      "smoke_only": 1,
+      "tactile_intermediate_size": 1536,
+      "tactile_num_fingers": 10,
+      "use_robot_state": 0,
+      "use_tactile_code": 1,
+      "use_tactile_deform": 1,
+      "use_tactile_vec": 1,
+      "use_tactile_vqvae": 1,
+      "vqvae_codebook_size": 64
+    },
+    "server_latency_ms": 1220.3054428100586,
+    "status": "success",
+    "torch_peak_allocated_mib": 8221.31,
+    "wall_duration_ms": 91092.186304
+  }
+}

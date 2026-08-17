@@ -1,0 +1,5 @@
+command=CUDA_VISIBLE_DEVICES=0 python scripts/revo3_v1_qwen_smoke.py --model-id <pinned-local-Qwen> --revision 89644892e4d85e24eaac8bacfd4f463576704203 --output outputs/qwen_native_generation.json --device-map auto --torch-dtype auto --max-new-tokens 128 --local-files-only
+exit_code=0
+duration_sec=14
+peak_gpu_used_mib=4540
+peak_host_used_mib=46089

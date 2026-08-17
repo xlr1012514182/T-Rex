@@ -1,0 +1,9 @@
+step=clone_source
+before_mib=47135
+after_mib=47104
+delta_mib=-31
+duration_sec=34
+status=pass
+checked_out=78cdb7882a2fc2772ca16d24935e5fb1437b536d
+official_base=09db9f3b3e3936fb760e67329174bd2bed527a05
+official_remote_main=09db9f3b3e3936fb760e67329174bd2bed527a05

@@ -1,0 +1,25 @@
+Loading VLA model from checkpoint: /root/autodl-tmp/revo3_trex_qwen_smoke_20260817/models/trex_midtrain_62efb3bc
+Auto-detected action_dim=62 from training_args.json
+Auto-detected action_chunk=16 from training_args.json
+Auto-detected use_robot_state=0 from training_args.json
+Auto-detected use_tactile_deform=1 from training_args.json
+Auto-detected use_tactile_vec=1 from training_args.json
+Auto-detected tactile_intermediate_size=1536 from training_args.json
+Auto-detected n_flare_tokens_per_frame=4 from training_args.json
+Auto-detected n_flare_steps=8 from training_args.json
+Auto-detected use_tactile_code=1 from training_args.json
+Auto-detected vqvae_codebook_size=64 from training_args.json
+Auto-detected use_tactile_vqvae=1 from training_args.json
+Auto-detected cascaded_total_steps=10 from training_args.json
+Auto-detected cascaded_split_step=6 from training_args.json
+Processor loaded from: /root/autodl-tmp/revo3_trex_qwen_smoke_20260817/models/trex_midtrain_62efb3bc/processor
+  Visual tower created from config
+  M-RoPE helper ready.
+Checkpoint loaded: missing=0, unexpected=0
+Flare prediction: 8 steps × 4 tok/frame = 32 total tokens
+Model loaded successfully!
+Warming up model...
+>>> embedded VQ-VAE in model — F6 encoded on-the-fly (K=64, W=16)
+Warm-up output shape: (16, 62), latency 1220.3 ms
+Smoke-only inference completed; ZMQ listener was not started.
+TREX_SMOKE_REPORT={"action_max": 1.2630821693801408, "action_min": -0.31338830199092627, "action_shape": [16, 62], "actions_all_finite": true, "checkpoint_repo": "miniFranka/T-Rex_midtrain_mecka23k_ucb100_vqvae_epoch6", "checkpoint_revision": "62efb3bcb45a3df0e088c8909d759b582cfb98af", "checkpoint_sha256": "5c86368a2c8ee0e3d06638d5b64b8e30494e836b5776eecd8f93b6c94a84582b", "chunk_id": 0, "claims_excluded": ["paper metric reproduction", "Revo3 compatibility", "physical task success", "latency certification", "clinical performance"], "load_state_dict_records": [{"missing_count": 0, "missing_first_20": [], "module_class": "Qwen3VLVLAModel", "source_key_count": 1412, "strict": false, "unexpected_count": 0, "unexpected_first_20": []}], "mode": "slow_and_fast", "observability_instrumentation": "temporary wrapper records load_state_dict return keys without modifying weights or production inference", "official_base_commit": "09db9f3b3e3936fb760e67329174bd2bed527a05", "production_path": "scripts/test.py:model_load + CascadedServer.predict(slow_and_fast)", "repo_commit": "78cdb7882a2fc2772ca16d24935e5fb1437b536d", "resolved_args": {"action_chunk": 16, "action_dim": 62, "cascaded_split_step": 6, "cascaded_total_steps": 10, "disable_tactile": 0, "n_flare_steps": 8, "n_flare_tokens_per_frame": 4, "smoke_only": 1, "tactile_intermediate_size": 1536, "tactile_num_fingers": 10, "use_robot_state": 0, "use_tactile_code": 1, "use_tactile_deform": 1, "use_tactile_vec": 1, "use_tactile_vqvae": 1, "vqvae_codebook_size": 64}, "schema_version": "trex-official-midtrain-production-smoke-v1", "server_latency_ms": 1220.3054428100586, "status": "success", "task_success_defined": false, "torch_peak_allocated_bytes": 8620667904, "torch_peak_reserved_bytes": 8759803904, "verification_scope": "official checkpoint construction and production CascadedServer one slow_and_fast dummy inference", "wall_duration_ms": 91092.186304}

@@ -1,0 +1,2 @@
+# Preserve byte-for-byte remote smoke evidence across Windows checkouts.
+audit/remote_gpu_smoke_20260817/** -text

@@ -1,0 +1,6 @@
+timestamp=2026-08-17T23:27:02+08:00
+0, GPU-2ff8de4d-51ee-049b-5a1e-1101d6e58966, NVIDIA GeForce RTX 4080 SUPER, 32760 MiB, 1 MiB, 32230 MiB, 0 %
+compute_apps:
+               total        used        free      shared  buff/cache   available
+Mem:          515617       44819      326259         748      144538      465790
+Swap:              0           0           0

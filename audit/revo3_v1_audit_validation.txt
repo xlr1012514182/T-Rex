@@ -2,7 +2,7 @@ Command:
   py -3.10 E:\CodexData\skills\robotics-repo-reproduction-audit\scripts\audit_reproduction_matrix.py audit\revo3_v1_reproduction_matrix.csv --outcome component-verified --require-reviewed --json
 
 Result:
-  rows: 20
+  rows: 22
   outcome: component-verified
   errors: []
   warnings: []
@@ -18,4 +18,14 @@ Result:
   exit code: 0
 
 Interpretation:
-  The second result validates the schema and declared synthetic-fixture invariants only. The manifest records training_approved=false, task_success_defined=false, no hardware replay, and zero task-success rates.
+  The matrix includes bounded remote GPU actor smokes for exact-revision Qwen
+  and the official T-Rex midtrain checkpoint. Those rows do not establish
+  planner accuracy, paper metrics, physical task success, or Revo3 checkpoint
+  compatibility; the official actor emitted [16,62], while Revo3 requires
+  [16,21]. The second result validates the schema and declared synthetic-fixture
+  invariants only. The manifest records training_approved=false,
+  task_success_defined=false, no hardware replay, and zero task-success rates.
+
+Remote evidence integrity check:
+  audit/remote_gpu_smoke_20260817/MANIFEST.sha256
+  29 of 29 listed artifacts matched their SHA-256 values.

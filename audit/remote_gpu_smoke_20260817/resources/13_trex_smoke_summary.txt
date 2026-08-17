@@ -1,0 +1,8 @@
+command=CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 python <audited-wrapper-around-scripts/test.py --smoke_only 1>
+checkpoint=<pinned-local-T-Rex-midtrain>
+exit_code=0
+duration_sec=97
+peak_gpu_used_mib=8674
+peak_host_used_mib=69494
+peak_host_delta_mib=25233
+guard_trip=false

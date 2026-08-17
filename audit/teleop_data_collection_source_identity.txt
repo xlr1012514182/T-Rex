@@ -4,6 +4,12 @@ Date: 2026-08-17 Asia/Shanghai
 Pinned public sources:
 - BrainCo Revo3 SDK: 7ba96ebd5bee16b730577e2f7c5df98600da53eb
   Official BrainCoTech organization; no root LICENSE at the pinned commit.
+  Its pinned install script identifies the external pyvitaisdk4bc 1.0.10
+  wheels; the lock records platform-specific length, ETag, and SHA-256 without
+  vendoring any wheel or force model.
+- ViTai SDK Release: 0071c61a1bf13539ab8c12b537a69e11bb78430a
+  Public VTSensor/FORCE6D_VECTOR API reference; no root LICENSE was found, so
+  the SDK wheel and per-sensor force models remain external-only artifacts.
 - BrainCo Revo3 ROS2: 67442f2811680f8666b7d51a22398d68a945941e
   Apache-2.0.
 - BrainCo Revo-Retargeting: 83087f108b0b853413842e6e185fe4fb509004c5
@@ -18,11 +24,18 @@ Pinned public sources:
   Repository license states Apache-2.0, but author/vendor identity is unverified;
   used only to cross-check method names and state semantics.
 
-The exact lock is teleop_data_collection/sources.lock.json. External checkouts
+The general source lock is teleop_data_collection/sources.lock.json. The
+separate Tianji discovery record is
+teleop_data_collection/tianji_sources.lock.json; it records that no current,
+authoritative public Tianji vendor SDK was found by the 2026-08-17 cutoff.
+External checkouts
 live below the ignored teleop_data_collection/vendor directory and are never
 staged. Entries with unclear redistribution terms require the explicit
 --ack-external-license switch.
 
 Tianji hardware remains blocked until the current vendor SDK, feedback structure,
 joint ordering, units, limits, payload/COM, calibrated wrist pose/IK, physical
-E-stop, and supervised capability probe are available.
+E-stop, and supervised capability probe are available. Revo3, U21VT/VisionTouch,
+camera, EDU EMG, and EDU glove also remain unverified as physical devices until
+their serial/fingerprint, calibration, unit, timing, and safety gates are
+captured on the actual bench.

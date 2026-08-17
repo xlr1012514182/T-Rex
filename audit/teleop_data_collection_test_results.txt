@@ -1,24 +1,45 @@
-Revo3 teleoperation data-collection verification
-Date: 2026-08-17 Asia/Shanghai
-Commit under test: 15195b5
+Revo3 teleoperation and hardware collection verification
+Date: 2026-08-18 Asia/Shanghai
+Revision under test: f68bddc05747e4e857281204952b6e38659c74e7
 
-Command:
+Full command:
   $env:PYTHONPATH='teleop_data_collection/src;.'
   py -3.10 -m pytest -q
 
-Result:
-  149 passed, 1 warning in 18.19s
+Root-agent observed result:
+  228 passed, 1 warning in 34.86s
 
-Additional checks:
+Independent final-audit result:
+  The final audit reported the same 228-passed full-suite result with the
+  identical warning. Its final camera/runner/collection regression set passed
+  32 tests; an earlier broader hardware/recording set passed 60 tests before
+  the final camera cleanup-retry case was added.
+
+Additional checks reported by the final hardware audit:
   py -3.10 -m compileall -q teleop_data_collection/src revo3_v1
-  py -3.10 teleop_data_collection/scripts/bootstrap_sources.py --list
+  parse all 16 checked JSON configurations and source locks
+  run the checked-in hardware collection template in default audit-only mode
   git diff --check
+  run a targeted repository secret scan
 
-All additional checks passed. The warning is the existing PyTorch/optree
-FutureWarning; it disables a C++ pytree optimization and is unrelated to the
-collection contracts.
+All additional checks passed. The default audit connected no device, imported
+no assembly plugin, and wrote no actuator. The targeted scan reported no
+credential match; credential values are not stored in this artifact.
 
-Verified scope: local interfaces, injected SDK boundaries, synthetic native-rate
-recording, causal projection, controller-label serialization, and failure paths.
-Excluded scope: physical robot motion, glove retarget quality, biological EMG
-accuracy, task success, training readiness, and clinical outcomes.
+Verified scope:
+  local contracts; pinned-source adapters; injected SDK/device boundaries;
+  synthetic native-rate recording; capture<=anchor and
+  receive<=controller-decision causality; causal fallback and rejection;
+  exporter revalidation; accepted exact-sent controller-label serialization;
+  fail-closed readiness; startup ownership; bounded control/shutdown/close;
+  quarantine and close-before-commit failure paths.
+
+Warning:
+  The one warning is the existing torch/optree FutureWarning. It disables a
+  C++ pytree optimization and does not expand or invalidate the verified scope.
+
+Explicitly excluded:
+  physical robot motion; physical SDK/device connectivity; calibrated camera,
+  U21VT/VisionTouch, Revo, glove, EMG or Tianji timing and units; retarget
+  quality; biological EMG accuracy; real-data training readiness; task success;
+  paper metrics; hardware safety certification; and clinical outcomes.
