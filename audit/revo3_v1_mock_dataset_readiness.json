@@ -1,0 +1,88 @@
+{
+  "dataset_id": "revo3-v1-synthetic-controller-target-smoke",
+  "dataset_version": "sha256:3a7f29d4c7d45c6ec503bbb3618c6295572efe9b68dee9d99edcf38fcc8f927f",
+  "source_environment": "Revo3Mock",
+  "target_environment": "Revo3Mock",
+  "compatibility_evidence": "same deterministic MockRevoBackend source and target; audit/revo3_v1_mock_controller_replay.json",
+  "robot": "Revo3-single-hand-21DoF-mock",
+  "action": {
+    "label_source": "controller_target",
+    "execution_boundary": "revo3_v1/data/synthetic.py action_target_rad -> revo3_v1/revo/backend.py MockRevoBackend.write_command",
+    "units": "radians (synthetic values; not validated physical limits)",
+    "joint_order": [
+      "little_MPR",
+      "little_MCP",
+      "little_PIP",
+      "little_DIP",
+      "ring_MPR",
+      "ring_MCP",
+      "ring_PIP",
+      "ring_DIP",
+      "middle_MPR",
+      "middle_MCP",
+      "middle_PIP",
+      "middle_DIP",
+      "index_MPR",
+      "index_MCP",
+      "index_PIP",
+      "index_DIP",
+      "thumb_MCP",
+      "thumb_PIP",
+      "thumb_DIP",
+      "thumb_CMP",
+      "thumb_CMR"
+    ],
+    "action_dim": 21,
+    "normalization": "q01/q99 statistics; audit/revo3_v1_mock_data_conversion.json",
+    "lookahead": 0
+  },
+  "timing": {
+    "timestamps_monotonic": true,
+    "episode_boundaries_verified": true,
+    "observation_action_alignment_verified": true
+  },
+  "cameras": [
+    {
+      "key": "full",
+      "resolution": "160x120",
+      "frames_expected": 80,
+      "frames_observed": 80,
+      "video_path": "outputs/revo3_audit_mock/dataset/episodes/*/rgb/frame_*.png (generated on demand; not committed)",
+      "slot_mapping_verified": true
+    }
+  ],
+  "training_episode_ids": [
+    "bottle_000",
+    "phone_000",
+    "plastic_bag_000",
+    "refrigerator_door_000"
+  ],
+  "evaluation_replay_episode_ids": [
+    "bottle_000",
+    "phone_000",
+    "plastic_bag_000",
+    "refrigerator_door_000"
+  ],
+  "fixed_sample_benchmark": true,
+  "video_label_audit": {
+    "sampled_episodes": 1,
+    "labels_match": true,
+    "evidence_path": "audit/revo3_v1_video_label_audit.md"
+  },
+  "replay": {
+    "expert_success_rate": 0.0,
+    "label_replay_success_rate": 0.0,
+    "episodes": 4,
+    "artifact_path": "audit/revo3_v1_mock_controller_replay.json"
+  },
+  "frame_cache": {
+    "enabled": false,
+    "cache_key": "",
+    "source_identity_verified": false
+  },
+  "scope": "synthetic plumbing fixture only",
+  "training_approved": false,
+  "task_success_defined": false,
+  "mock_serialization_replay_exact_match_rate": 1.0,
+  "replay_metric_note": "Task success is undefined in this fixture, so both schema-required task-success rates are conservatively encoded as 0.0. The separate 80/80 exact serialization result is not a task-success metric."
+}

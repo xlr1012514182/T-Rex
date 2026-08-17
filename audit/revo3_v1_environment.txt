@@ -1,0 +1,14 @@
+Command:
+  py -3.10 -c "import sys, numpy, PIL, torch; ..."
+
+Observed on 2026-08-17:
+  Python: 3.10.4, Windows x86_64
+  NumPy: 1.26.4
+  Pillow: 10.1.0
+  PyTorch: 2.6.0+cpu
+  CUDA available: False
+  import revo3_v1: pass
+
+Compatibility boundary:
+  pyproject.toml pins Python 3.10.*, torch 2.6.0, NumPy 2.2.6, and Pillow 12.1.1.
+  This smoke environment therefore verifies the dependency-light Revo3 components only; it is not a full T-Rex installation verification.

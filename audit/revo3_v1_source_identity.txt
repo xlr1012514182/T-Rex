@@ -1,0 +1,14 @@
+Commands:
+  git remote -v
+  git ls-remote upstream refs/heads/main
+  git show -s --format="%H%n%P%n%cd%n%s" upstream/main
+  git log -5 --oneline --decorate
+
+Observed on 2026-08-17:
+  upstream fetch: https://github.com/ZhuoyangLiu2005/T-Rex.git
+  origin fetch/push: https://github.com/xlr1012514182/T-Rex.git
+  upstream/main: 09db9f3b3e3936fb760e67329174bd2bed527a05
+  upstream/main parent: e3a85a4410b5a5602eba84a63d068618362abdf4
+  upstream/main subject: nit: release camera intrinsics + extrinsics
+  local branch: agent/revo3-v1-demo
+  local branch is an intentional Revo3 adaptation derived from upstream/main; it is not an unmodified paper checkout.

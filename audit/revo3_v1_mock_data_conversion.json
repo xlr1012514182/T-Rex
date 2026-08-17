@@ -1,0 +1,29 @@
+{
+  "command": "py -3.10 scripts/revo3_v1_generate_robot_demo.py --output outputs/revo3_audit_mock/dataset --episodes-per-task 1 --frames 20",
+  "executed_at": "2026-08-17 Asia/Shanghai",
+  "exit_code": 0,
+  "schema_version": "revo3-trex-conversion-v1",
+  "dataset_scope": "synthetic fixture for adapter plumbing only",
+  "records": 80,
+  "episode_ids": [
+    "bottle_000",
+    "phone_000",
+    "plastic_bag_000",
+    "refrigerator_door_000"
+  ],
+  "rgb_frames": 80,
+  "rgb_resolution": "160x120",
+  "action_shape": [16, 21],
+  "state_shape": [21],
+  "tactile_shape": [5, 6],
+  "action_label_source": "controller_target",
+  "contains_emg": false,
+  "joint_order_hash": "659198b4ae6f2627e0bdd5c16a3be5c28e246ae93669d49077fb9b48b16bff7f",
+  "records_sha256": "3a7f29d4c7d45c6ec503bbb3618c6295572efe9b68dee9d99edcf38fcc8f927f",
+  "statistics_sha256": "9e19aa9c5f5921988bd3d69ef8b90ff1938b5d20f90d5b43992acec9e39a1888",
+  "limitations": [
+    "No physical robot or task success semantics are present.",
+    "Synthetic radians are not Revo3 joint limits.",
+    "Use a validated LeRobot conversion and hardware replay gate before the planned 20-hour training corpus."
+  ]
+}

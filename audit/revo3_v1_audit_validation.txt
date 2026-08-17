@@ -1,0 +1,21 @@
+Command:
+  py -3.10 E:\CodexData\skills\robotics-repo-reproduction-audit\scripts\audit_reproduction_matrix.py audit\revo3_v1_reproduction_matrix.csv --outcome component-verified --require-reviewed --json
+
+Result:
+  rows: 20
+  outcome: component-verified
+  errors: []
+  warnings: []
+  exit code: 0
+
+Command:
+  py -3.10 E:\CodexData\skills\lehome-imitation-data\scripts\audit_dataset_readiness.py audit\revo3_v1_mock_dataset_readiness.json --json
+
+Result:
+  ready: true
+  errors: []
+  warnings: []
+  exit code: 0
+
+Interpretation:
+  The second result validates the schema and declared synthetic-fixture invariants only. The manifest records training_approved=false, task_success_defined=false, no hardware replay, and zero task-success rates.

@@ -1,0 +1,17 @@
+{
+  "command_family": "load each generated RevoEpisode; pass every serialized action_target_rad through MockRevoBackend.write_command; read state and require exact float32 equality",
+  "executed_at": "2026-08-17 Asia/Shanghai",
+  "scope": "mock controller-boundary serialization replay; no task-success meaning",
+  "episodes": 4,
+  "frames": 80,
+  "all_exact": true,
+  "serialization_match_rate": 1.0,
+  "results": [
+    {"episode_id": "bottle_000", "frames": 20, "exact_controller_target_matches": 20},
+    {"episode_id": "phone_000", "frames": 20, "exact_controller_target_matches": 20},
+    {"episode_id": "plastic_bag_000", "frames": 20, "exact_controller_target_matches": 20},
+    {"episode_id": "refrigerator_door_000", "frames": 20, "exact_controller_target_matches": 20}
+  ],
+  "task_success_defined": false,
+  "hardware_replay_performed": false
+}

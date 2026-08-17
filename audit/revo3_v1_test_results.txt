@@ -1,0 +1,15 @@
+Command: py -3.10 -m pytest -q tests/revo3_v1
+Working directory: E:\Documents\brainco_for_Dexhand_V1\T-Rex
+Executed: 2026-08-17 Asia/Shanghai
+Exit code: 0
+
+........................................................................ [ 75%]
+.......................                                                  [100%]
+============================== warnings summary ===============================
+D:\Embodied_AI_Master_Degree\python3_10_4\lib\site-packages\torch\utils\_pytree.py:185
+  FutureWarning: optree is installed but the version is too old to support PyTorch Dynamo in C++ pytree. C++ pytree support is disabled.
+
+95 passed, 1 warning in 3.05s
+
+Scope: component/unit/integration tests using mocks and synthetic fixtures.
+Excluded: real Qwen inference, official T-Rex checkpoint loading/inference, GPU execution, Revo3 hardware, real tactile sensors, real EMG, and physical task success.
