@@ -765,6 +765,13 @@ def main(args):
           f"{np.array(result['actions']).shape}, "
           f"latency {result['latency_ms']:.1f} ms")
 
+    # A bounded model-loading/inference gate for CI and remote GPU bring-up.
+    # This intentionally exercises the same model_load + CascadedServer path as
+    # production serving, then exits before opening a network listener.
+    if args.smoke_only:
+        print("Smoke-only inference completed; ZMQ listener was not started.")
+        return result
+
     # ZMQ Server
     context = zmq.Context()
     socket = context.socket(zmq.REP)
@@ -774,30 +781,38 @@ def main(args):
 
     step_counter = 0
     n_slow = n_fast = 0
-    while True:
-        try:
-            payload = pickle.loads(socket.recv())
+    try:
+        while True:
+            try:
+                payload = pickle.loads(socket.recv())
 
-            # Default to slow_and_fast for first request; clients can override
-            # with mode='slow' or mode='fast'.
-            mode = payload.get("mode", "slow_and_fast")
-            result = server.predict(mode, payload)
-            if mode == "fast":
-                n_fast += 1
-            else:
-                n_slow += 1
+                # Default to slow_and_fast for first request; clients can override
+                # with mode='slow' or mode='fast'.
+                mode = payload.get("mode", "slow_and_fast")
+                result = server.predict(mode, payload)
+                if mode == "fast":
+                    n_fast += 1
+                else:
+                    n_slow += 1
 
-            socket.send(pickle.dumps(result))
-            step_counter += 1
-            if step_counter % 10 == 0:
-                print(f"Processed {step_counter} requests "
-                      f"(slow={n_slow}, fast={n_fast}, "
-                      f"chunk_id={server.chunk_id}). "
-                      f"Task: {payload.get('task_description', '')}")
+                socket.send(pickle.dumps(result))
+                step_counter += 1
+                if step_counter % 10 == 0:
+                    print(f"Processed {step_counter} requests "
+                          f"(slow={n_slow}, fast={n_fast}, "
+                          f"chunk_id={server.chunk_id}). "
+                          f"Task: {payload.get('task_description', '')}")
+                if args.max_requests > 0 and step_counter >= args.max_requests:
+                    print(f"Reached max_requests={args.max_requests}; shutting down cleanly.")
+                    break
 
-        except Exception as e:
-            traceback.print_exc()
-            socket.send(pickle.dumps({"status": "error", "message": str(e)}))
+            except Exception as e:
+                traceback.print_exc()
+                socket.send(pickle.dumps({"status": "error", "message": str(e)}))
+    finally:
+        socket.close(linger=0)
+        context.term()
+    return result
 
 
 def _pil_to_bytes(img: Image.Image) -> bytes:
@@ -829,6 +844,15 @@ if __name__ == "__main__":
     parser.add_argument("--cuda", type=str, default="0")
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--image_size", type=int, nargs=2, default=None, metavar=("W", "H"))
+    parser.add_argument(
+        "--smoke_only", type=int, choices=(0, 1), default=0,
+        help="Run the production model-load and one slow+fast warm-up, then exit "
+             "before binding a ZMQ port.",
+    )
+    parser.add_argument(
+        "--max_requests", type=int, default=0,
+        help="Exit cleanly after this many successful ZMQ requests; 0 serves forever.",
+    )
 
     # Cascaded flow matching schedule (auto-detected from training_args.json
     # when available).  The client sends payloads with mode='slow' once per
