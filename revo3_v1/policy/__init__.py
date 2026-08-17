@@ -34,6 +34,15 @@ from .dataset import (
 )
 from .schedule import MAIN_ALIGNED_SCHEDULE, PolicySchedule
 from .runner import TReXPolicyRunner
+from .zmq_backend import (
+    RequestReplyTransport,
+    TReXTransportError,
+    TReXTransportTimeout,
+    TReXWireProtocolError,
+    TReXZmqError,
+    ZmqReqTransport,
+    ZmqTReXBackend,
+)
 
 __all__ = [
     "ACTION_CHUNK",
@@ -53,13 +62,20 @@ __all__ = [
     "RevoEpisodeAdapter",
     "RevoNormStats",
     "RevoTrainingSample",
+    "RequestReplyTransport",
     "SlowFastCache",
     "TReXBackend",
+    "TReXTransportError",
+    "TReXTransportTimeout",
     "TReXRevoPolicyAdapter",
     "TReXPolicyRunner",
+    "TReXWireProtocolError",
+    "TReXZmqError",
     "TaskKey",
     "TemporalAggregationError",
     "build_revo_trex_model",
     "build_revo_feature_schema",
     "load_revo_compatible_state_dict",
+    "ZmqReqTransport",
+    "ZmqTReXBackend",
 ]
