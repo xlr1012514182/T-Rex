@@ -48,6 +48,7 @@ TASK_INSTRUCTIONS = {
 
 
 _SYNTHETIC_TIANJI_ARM_TOKEN = "synthetic-fixture-arm-token"
+_TACTILE_HISTORY_LENGTH = 16
 
 
 class _SyntheticMonotonicClock:
@@ -387,14 +388,43 @@ def _append_native_streams(
                 },
             ),
         )
-    for sequence, timestamp_ns in _timestamps(epoch, config.duration_s, config.tactile_hz):
+    # A policy frame consumes 16 *distinct native* Force6D samples.  Seed a
+    # genuine pre-roll before the first 30 Hz anchor so even a short plumbing
+    # fixture can satisfy that contract without padding or 30 Hz ZOH reuse.
+    tactile_period_ns = int(1_000_000_000 / config.tactile_hz)
+    tactile_preroll = _TACTILE_HISTORY_LENGTH - 1
+    tactile_timestamps = list(
+        _timestamps(epoch, config.duration_s, config.tactile_hz)
+    )
+    tactile_timestamps = [
+        (
+            sequence,
+            epoch - (tactile_preroll - sequence) * tactile_period_ns,
+        )
+        for sequence in range(tactile_preroll)
+    ] + [
+        (sequence + tactile_preroll, timestamp_ns)
+        for sequence, timestamp_ns in tactile_timestamps
+    ]
+    for sequence, timestamp_ns in tactile_timestamps:
         features = np.zeros((5, 6), np.float32)
         features[:, 0] = min(sequence / 60.0, 1.0)
+        tactile_diff = np.full(
+            (5, 240, 240),
+            sequence % 255,
+            dtype=np.uint8,
+        )
+        finger_timestamp_ns = np.full(5, timestamp_ns, dtype=np.int64)
         recorder.append(
             "tactile",
             NativeSample(
                 _header("mock_u21vt", sequence, timestamp_ns),
-                {"features": features},
+                {
+                    "features": features,
+                    "force6d_finger_timestamp_ns": finger_timestamp_ns,
+                    "tactile_diff": tactile_diff,
+                    "tactile_diff_timestamp_ns": finger_timestamp_ns.copy(),
+                },
             ),
         )
     for sequence, timestamp_ns in _timestamps(epoch, config.duration_s, config.glove_hz):
@@ -452,11 +482,13 @@ async def _record_commands_and_anchors(
     duration_s: float,
 ) -> None:
     backend = MockRevoBackend()
+    revo_clock = _SyntheticMonotonicClock(recorder.epoch_ns)
     writer = TeleopRevoWriter(
         RevoCommandPipeline(
             backend,
             SafetySupervisor(SafetyEnvelope.demo(max_step_rad=0.08)),
-        )
+        ),
+        clock_ns=revo_clock,
     )
     anchor_count = max(2, int(np.floor(duration_s * 30)) + 1)
     previous_q = np.zeros(21, np.float32)
@@ -473,6 +505,11 @@ async def _record_commands_and_anchors(
                 sequence=index,
             )
             nominal = np.full(21, min(0.02 * (index + 1), 0.7), np.float32)
+            decision_ns = anchor_ns + 500_000
+            # The synthetic receipt represents a completed controller write,
+            # not host wall-clock latency spent constructing fixture streams.
+            # Keep its explicit causal latency inside one 30 Hz control period.
+            revo_clock.advance_to(decision_ns + 20_000)
             receipt = await writer.submit_target(
                 request_id=f"{task}-hand-{index:06d}",
                 nominal_q_rad=nominal,
@@ -480,7 +517,7 @@ async def _record_commands_and_anchors(
                 task_version=1,
                 safety_context=SafetyContext(),
                 emg_requests_close=True,
-                decision_timestamp_ns=anchor_ns + 500_000,
+                decision_timestamp_ns=decision_ns,
                 state=state,
             )
             if not receipt.accepted or receipt.exact_sent_target is None:

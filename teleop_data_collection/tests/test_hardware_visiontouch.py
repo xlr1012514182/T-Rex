@@ -11,6 +11,8 @@ from revo3_teleop.hardware.visiontouch import (
     VISIONTOUCH_AXIS_ORDER,
     VISIONTOUCH_FINGER_ORDER,
     VISIONTOUCH_MAX_RAW_RANK,
+    VISIONTOUCH_PROFILE_DIFF_ONLY,
+    VISIONTOUCH_PROFILE_FORCE6D_DIFF,
     VisionTouchForce6DConfig,
     VisionTouchForce6DSource,
 )
@@ -18,6 +20,7 @@ from revo3_teleop.hardware.visiontouch import (
 
 class _DataType:
     FORCE6D_VECTOR = "force6d"
+    DIFF_IMG = "diff"
 
 
 class _FakeFinder:
@@ -32,7 +35,7 @@ class _FakeFinder:
 
 
 class _FakeSensor:
-    def __init__(self, sdk, *, config, force_model_path) -> None:
+    def __init__(self, sdk, *, config, force_model_path=None) -> None:
         self.sdk = sdk
         self.serial = config["serial"]
         self.force_model_path = force_model_path
@@ -45,12 +48,19 @@ class _FakeSensor:
         if self.sdk.fail_calibrate_serial == self.serial:
             raise RuntimeError("injected calibration failure")
 
-    def collect_sensor_data(self, dtype):
-        assert dtype == _DataType.FORCE6D_VECTOR
-        value = self.sdk.values[self.serial]
-        if value is self.sdk.missing_key:
-            return {}
-        return {dtype: value}
+    def collect_sensor_data(self, *dtypes):
+        result = {}
+        for dtype in dtypes:
+            if dtype == _DataType.FORCE6D_VECTOR:
+                value = self.sdk.values[self.serial]
+            elif dtype == _DataType.DIFF_IMG:
+                value = self.sdk.diff_values[self.serial]
+            else:
+                raise AssertionError(dtype)
+            if value is self.sdk.missing_key:
+                continue
+            result[dtype] = value
+        return result
 
     def release(self):
         self.released += 1
@@ -63,9 +73,17 @@ class _FakeSensor:
 class _FakeSdk:
     VTSDataType = _DataType
 
-    def __init__(self, sns, values) -> None:
+    def __init__(self, sns, values, diff_values=None) -> None:
         self.sns = list(sns)
         self.values = dict(values)
+        self.diff_values = (
+            {
+                serial: np.zeros((240, 240), dtype=np.uint8)
+                for serial in self.sns
+            }
+            if diff_values is None
+            else dict(diff_values)
+        )
         self.sensors = {}
         self.missing_key = object()
         self.fail_calibrate_serial = None
@@ -74,7 +92,7 @@ class _FakeSdk:
     def VTSDeviceFinder(self):
         return _FakeFinder(self)
 
-    def VTSensor(self, *, config, force_model_path):
+    def VTSensor(self, *, config, force_model_path=None):
         return _FakeSensor(
             self,
             config=config,
@@ -105,6 +123,7 @@ def _config(tmp_path, serials, hashes, **overrides):
         "expected_model_sha256": hashes,
         "allow_hardware_probe": True,
         "allow_hardware_stream": True,
+        "max_inter_finger_skew_ns": 50_000_000,
     }
     kwargs.update(overrides)
     return VisionTouchForce6DConfig(**kwargs)
@@ -113,7 +132,7 @@ def _config(tmp_path, serials, hashes, **overrides):
 def test_visiontouch_is_lazy_and_emits_only_verified_force6d_features(tmp_path: Path) -> None:
     serials, hashes, values = _fixture(tmp_path)
     sdk = _FakeSdk(reversed(tuple(serials.values())), values)
-    ticks = iter([10_000, 10_100])
+    ticks = iter([10_000, 10_020, 10_040, 10_060, 10_080, 10_100])
     source = VisionTouchForce6DSource(
         _config(tmp_path, serials, hashes),
         sdk_module=sdk,
@@ -137,6 +156,10 @@ def test_visiontouch_is_lazy_and_emits_only_verified_force6d_features(tmp_path: 
     expected = np.stack([values[serials[finger]] for finger in VISIONTOUCH_FINGER_ORDER])
     np.testing.assert_array_equal(sample.payload["features"], expected)
     np.testing.assert_array_equal(sample.payload["finger_valid"], np.ones(5, np.uint8))
+    np.testing.assert_array_equal(
+        sample.payload["force6d_finger_timestamp_ns"],
+        [10_020, 10_040, 10_060, 10_080, 10_100],
+    )
     expected_shapes = np.full((5, VISIONTOUCH_MAX_RAW_RANK + 1), -1, np.int32)
     expected_shapes[:, :2] = [1, 6]
     np.testing.assert_array_equal(sample.payload["raw_return_shape"], expected_shapes)
@@ -237,7 +260,7 @@ def test_visiontouch_accepts_official_multivector_shape_without_component_trunca
         _config(tmp_path, serials, hashes),
         sdk_module=_FakeSdk(serials.values(), values),
         sdk_version="1.0.10",
-        clock=iter([1, 2]).__next__,
+        clock=iter([1, 2, 3, 4, 5, 6]).__next__,
     )
     source.probe()
     source.start()
@@ -313,3 +336,90 @@ def test_visiontouch_stop_retains_failed_release_for_retry(tmp_path: Path) -> No
     assert sdk.sensors[serials["ring"]].released == 1
     source.stop()
     assert sdk.sensors[serials["ring"]].released == 2
+
+
+def test_profile_a_collects_force_and_five_diff_images_with_real_host_times(
+    tmp_path: Path,
+) -> None:
+    serials, hashes, values = _fixture(tmp_path)
+    diff_values = {
+        serial: np.full((240, 240), index, dtype=np.uint8)
+        for index, serial in enumerate(serials.values())
+    }
+    sdk = _FakeSdk(serials.values(), values, diff_values)
+    ticks = iter([100, 101, 102, 103, 104, 105])
+    source = VisionTouchForce6DSource(
+        _config(
+            tmp_path,
+            serials,
+            hashes,
+            capture_profile=VISIONTOUCH_PROFILE_FORCE6D_DIFF,
+        ),
+        sdk_module=sdk,
+        sdk_version="1.0.10",
+        clock=lambda: next(ticks),
+    )
+    report = source.probe()
+    assert report.diff_output_shape == (5, 240, 240)
+    source.start()
+    sample = source.poll()
+    assert sample.payload["features"].shape == (5, 6)
+    assert sample.payload["tactile_diff"].shape == (5, 240, 240)
+    np.testing.assert_array_equal(
+        sample.payload["tactile_diff_timestamp_ns"], [101, 102, 103, 104, 105]
+    )
+    assert sample.header.capture_timestamp_ns == 105
+    source.stop()
+
+
+def test_profile_b_diff_only_never_requires_or_fabricates_force6d(tmp_path: Path) -> None:
+    serials, _, values = _fixture(tmp_path)
+    source = VisionTouchForce6DSource(
+        VisionTouchForce6DConfig(
+            force_model_dir=tmp_path / "unused",
+            finger_serials=serials,
+            expected_model_sha256={},
+            allow_hardware_probe=True,
+            allow_hardware_stream=True,
+            max_inter_finger_skew_ns=50_000_000,
+            capture_profile=VISIONTOUCH_PROFILE_DIFF_ONLY,
+        ),
+        sdk_module=_FakeSdk(serials.values(), values),
+        sdk_version="1.0.10",
+        clock=iter([10, 11, 12, 13, 14, 15]).__next__,
+    )
+    report = source.probe()
+    assert report.force_model_mode == "not_used_diff_only"
+    source.start()
+    assert all(sensor.force_model_path is None for sensor in source._sensors.values())
+    sample = source.poll()
+    assert "features" not in sample.payload
+    assert sample.payload["tactile_diff"].dtype == np.uint8
+    source.stop()
+
+
+def test_diff_profile_rejects_missing_or_wrong_shape_without_partial_payload(
+    tmp_path: Path,
+) -> None:
+    serials, _, values = _fixture(tmp_path)
+    sdk = _FakeSdk(serials.values(), values)
+    sdk.diff_values[serials["middle"]] = np.zeros((120, 120), dtype=np.uint8)
+    source = VisionTouchForce6DSource(
+        VisionTouchForce6DConfig(
+            force_model_dir=tmp_path / "unused",
+            finger_serials=serials,
+            expected_model_sha256={},
+            allow_hardware_probe=True,
+            allow_hardware_stream=True,
+            max_inter_finger_skew_ns=50_000_000,
+            capture_profile=VISIONTOUCH_PROFILE_DIFF_ONLY,
+        ),
+        sdk_module=sdk,
+        sdk_version="1.0.10",
+        clock=iter(range(100, 200)).__next__,
+    )
+    source.probe()
+    source.start()
+    with pytest.raises(RuntimeError, match="must be \(240, 240\)"):
+        source.poll()
+    source.stop()

@@ -15,7 +15,7 @@ from typing import Optional
 import numpy as np
 
 
-_F6_DIM = 60   # 10 fingers × 6 dims
+_UPSTREAM_F6_DIM = 60   # 10 fingers × 6 dims
 
 
 @dataclass
@@ -23,6 +23,15 @@ class TacF6Stats:
     tacf6_min: np.ndarray   # [60]
     tacf6_max: np.ndarray   # [60]
     tacf6_mask: np.ndarray  # [60] bool
+
+    def __post_init__(self) -> None:
+        widths = {
+            int(np.asarray(self.tacf6_min).size),
+            int(np.asarray(self.tacf6_max).size),
+            int(np.asarray(self.tacf6_mask).size),
+        }
+        if len(widths) != 1 or next(iter(widths)) not in (30, 60):
+            raise ValueError("Force6D stats must have a consistent width of 30 or 60")
 
     @classmethod
     def from_data_root(cls, data_root: str) -> "TacF6Stats":
@@ -47,12 +56,13 @@ class TacF6Stats:
             tacf6_min = np.min(np.stack(all_q01), axis=0)
             tacf6_max = np.max(np.stack(all_q99), axis=0)
         else:
-            tacf6_min = np.full(_F6_DIM, -1.0, dtype=np.float32)
-            tacf6_max = np.full(_F6_DIM, +1.0, dtype=np.float32)
+            tacf6_min = np.full(_UPSTREAM_F6_DIM, -1.0, dtype=np.float32)
+            tacf6_max = np.full(_UPSTREAM_F6_DIM, +1.0, dtype=np.float32)
 
-        if tacf6_min.shape[0] != _F6_DIM or tacf6_max.shape[0] != _F6_DIM:
+        if (tacf6_min.shape[0] != _UPSTREAM_F6_DIM
+                or tacf6_max.shape[0] != _UPSTREAM_F6_DIM):
             raise ValueError(
-                f"Expected F6 stats of dim {_F6_DIM}, got "
+                f"Expected upstream F6 stats of dim {_UPSTREAM_F6_DIM}, got "
                 f"{tacf6_min.shape}/{tacf6_max.shape}")
 
         return cls(
@@ -64,10 +74,12 @@ class TacF6Stats:
     def normalize(self, x: np.ndarray) -> np.ndarray:
         """Min-max normalize F6 to [-1, 1].
 
-        Accepts shape [..., 10, 6] or [..., 60]. Returns the same shape.
+        Accepts any shape whose trailing flattened width matches this stats
+        artifact (60 upstream or 30 for Revo3). Returns the same shape.
         """
         orig_shape = x.shape
-        flat = x.reshape(-1, _F6_DIM).astype(np.float32, copy=False)
+        width = int(self.tacf6_min.size)
+        flat = x.reshape(-1, width).astype(np.float32, copy=False)
         denom = (self.tacf6_max - self.tacf6_min) + 1e-8
         normed = np.clip(2.0 * (flat - self.tacf6_min) / denom - 1.0, -1.0, 1.0)
         # Apply mask (mask is currently all-True; kept for parity with trainer)
@@ -76,7 +88,8 @@ class TacF6Stats:
 
     def denormalize(self, x_norm: np.ndarray) -> np.ndarray:
         orig_shape = x_norm.shape
-        flat = x_norm.reshape(-1, _F6_DIM).astype(np.float32, copy=False)
+        width = int(self.tacf6_min.size)
+        flat = x_norm.reshape(-1, width).astype(np.float32, copy=False)
         denom = (self.tacf6_max - self.tacf6_min)
         out = (flat + 1.0) * 0.5 * denom + self.tacf6_min
         out = np.where(self.tacf6_mask, out, flat)

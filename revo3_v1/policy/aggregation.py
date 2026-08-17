@@ -7,7 +7,7 @@ from typing import Optional
 
 import numpy as np
 
-from .contracts import ActionChunk, TaskKey
+from .contracts import ActionChunk, InferenceMode, TaskKey
 
 
 class TemporalAggregationError(RuntimeError):
@@ -66,9 +66,16 @@ class ActionTemporalAggregator:
                     "chunk revisions must have strictly increasing generation time."
                 )
             if chunk.chunk_id != last.chunk_id:
-                raise TemporalAggregationError(
-                    "refinements for one start step must retain the stable chunk_id."
-                )
+                if chunk.mode in {InferenceMode.SLOW, InferenceMode.SLOW_AND_FAST}:
+                    # A repeated slow boundary is a replacement generation,
+                    # never a refinement.  Main clears its whole temporal
+                    # buffer whenever slow inference runs; mirror that even
+                    # if scheduling jitter repeats the same start step.
+                    self._chunks.clear()
+                else:
+                    raise TemporalAggregationError(
+                        "fast refinements for one start step must retain the stable chunk_id."
+                    )
 
         self._task_key = chunk.task_key
         self._start_step = chunk.start_step

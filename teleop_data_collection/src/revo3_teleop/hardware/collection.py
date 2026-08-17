@@ -224,6 +224,27 @@ def assess_hardware_collection_config(
         blockers.append("supported_task_required")
     if _placeholder(episode.get("instruction")):
         blockers.append("planner_instruction_required")
+    for key in (
+        "task_id",
+        "object_id",
+        "object_instance",
+        "operator",
+        "collection_day",
+        "grasp_primitive",
+        "instruction_source",
+    ):
+        if _placeholder(episode.get(key)):
+            blockers.append(f"episode_{key}_required")
+    try:
+        if int(episode.get("task_version")) <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        blockers.append("positive_episode_task_version_required")
+    if str(episode.get("instruction_source", "")) == "frozen_planner":
+        if _placeholder(episode.get("planner_revision")):
+            blockers.append("episode_planner_revision_required")
+        if not _sha256(episode.get("planner_output_sha256")):
+            blockers.append("episode_planner_output_sha256_required")
     try:
         duration_s = _positive_number(episode.get("duration_s"), name="episode.duration_s")
         warmup_s = _positive_number(
@@ -319,6 +340,7 @@ def assess_hardware_collection_config(
     runtime_budgets: dict[str, float] = {}
     for key in (
         "control_step_timeout_ms",
+        "max_command_latency_ms",
         "shutdown_timeout_ms",
         "safety_watchdog_budget_ms",
     ):
@@ -340,6 +362,11 @@ def assess_hardware_collection_config(
         and runtime_budgets["control_step_timeout_ms"] > 1000.0 / 30.0
     ):
         blockers.append("control_step_timeout_exceeds_30hz_anchor_period")
+    if (
+        "max_command_latency_ms" in runtime_budgets
+        and runtime_budgets["max_command_latency_ms"] > 1000.0 / 30.0
+    ):
+        blockers.append("max_command_latency_exceeds_30hz_anchor_period")
 
     revo = _mapping(raw["revo"], name="revo")
     if str(revo.get("state_stream", "")).strip() != core_streams["state"]:
@@ -375,6 +402,8 @@ def assess_hardware_collection_config(
         blockers.append("camera_rectified_stream_must_match_runtime_camera_stream")
     if not _sha256(camera.get("expected_probe_fingerprint")):
         blockers.append("camera_probe_fingerprint_required")
+    if str(camera.get("camera_profile_id", "")).strip() != "revo3_full_center_v1":
+        blockers.append("revo3_full_center_camera_profile_required")
     _check_file_hash(
         config,
         path_value=camera.get("calibration_file"),
@@ -402,33 +431,76 @@ def assess_hardware_collection_config(
     elif tactile_mode == "visiontouch_force6d":
         if tactile_stream != "tactile":
             blockers.append("visiontouch_force6d_stream_must_be_tactile")
+        capture_profile = str(tactile.get("capture_profile", "")).strip().lower()
+        vla_profile = str(tactile.get("vla_tactile_profile", "")).strip()
+        profile_pairs = {
+            "force6d_diff": "profile_a_force6d_diff",
+            "diff_only": "profile_b_diff_only",
+            "force6d": "ablation_force6d_only",
+        }
+        if capture_profile not in profile_pairs:
+            blockers.append("explicit_visiontouch_capture_profile_required")
+        if vla_profile not in set(profile_pairs.values()):
+            blockers.append("supported_vla_tactile_profile_required")
+        elif capture_profile in profile_pairs and profile_pairs[capture_profile] != vla_profile:
+            blockers.append("visiontouch_capture_and_vla_tactile_profile_mismatch")
+        try:
+            _positive_number(
+                tactile.get("max_inter_finger_skew_ns"),
+                name="tactile.max_inter_finger_skew_ns",
+            )
+        except (TypeError, ValueError):
+            blockers.append("approved_visiontouch_max_inter_finger_skew_ns_required")
+        for key in ("checkpoint_family_id", "normalization_family_id"):
+            if _placeholder(tactile.get(key)):
+                blockers.append(f"tactile_{key}_required")
+        if not _sha256(tactile.get("capability_manifest_sha256")):
+            blockers.append("tactile_capability_manifest_sha256_required")
         serials = tactile.get("finger_serials")
         hashes = tactile.get("expected_model_sha256")
         model_root = config.resolve_path(tactile.get("force_model_dir"))
         finger_order = ("thumb", "index", "middle", "ring", "pinky")
-        if not isinstance(serials, Mapping) or not isinstance(hashes, Mapping):
-            blockers.append("five_visiontouch_serials_and_hashes_required")
-        elif model_root is None or not model_root.is_dir():
-            blockers.append("visiontouch_force_model_dir_required")
+        needs_force = capture_profile in {"force6d", "force6d_diff"}
+        if not isinstance(serials, Mapping):
+            blockers.append("five_visiontouch_serials_required")
         else:
             observed_serials: list[str] = []
             for finger in finger_order:
                 serial = serials.get(finger)
-                expected = hashes.get(finger)
-                if _placeholder(serial) or not _sha256(expected):
-                    blockers.append(f"visiontouch_{finger}_serial_and_model_hash_required")
+                if _placeholder(serial):
+                    blockers.append(f"visiontouch_{finger}_serial_required")
                     continue
                 serial_text = str(serial).strip()
                 observed_serials.append(serial_text)
-                model = model_root / serial_text / f"{serial_text}.onnx.enc"
-                if not model.is_file():
-                    blockers.append(f"visiontouch_{finger}_force_model_missing")
-                elif _file_sha256(model) != str(expected).strip().lower():
-                    blockers.append(f"visiontouch_{finger}_force_model_hash_mismatch")
             if len(observed_serials) == 5 and len(set(observed_serials)) != 5:
                 blockers.append("visiontouch_finger_serials_must_be_unique")
-            if not any(item.startswith("visiontouch_") for item in blockers):
-                evidence.append("all_visiontouch_force_model_hashes_verified")
+            if needs_force:
+                if not isinstance(hashes, Mapping):
+                    blockers.append("five_visiontouch_model_hashes_required")
+                elif model_root is None or not model_root.is_dir():
+                    blockers.append("visiontouch_force_model_dir_required")
+                else:
+                    force_errors_before = len(blockers)
+                    for finger in finger_order:
+                        serial = serials.get(finger)
+                        expected = hashes.get(finger)
+                        if _placeholder(serial) or not _sha256(expected):
+                            blockers.append(
+                                f"visiontouch_{finger}_serial_and_model_hash_required"
+                            )
+                            continue
+                        serial_text = str(serial).strip()
+                        model = model_root / serial_text / f"{serial_text}.onnx.enc"
+                        if not model.is_file():
+                            blockers.append(f"visiontouch_{finger}_force_model_missing")
+                        elif _file_sha256(model) != str(expected).strip().lower():
+                            blockers.append(f"visiontouch_{finger}_force_model_hash_mismatch")
+                    if len(blockers) == force_errors_before:
+                        evidence.append("all_visiontouch_force_model_hashes_verified")
+            elif hashes not in (None, {}):
+                blockers.append("diff_only_must_not_claim_unused_force_model_hashes")
+            elif tactile.get("force_model_dir") not in (None, ""):
+                blockers.append("diff_only_must_not_claim_unused_force_model_dir")
     else:
         if tactile_stream != "tactile_pressure":
             blockers.append("u21vt_pressure_stream_must_be_tactile_pressure")
@@ -551,6 +623,8 @@ class QueueNativeSource(Protocol):
 class CollectionControlCycle:
     hand_receipt: CommandReceipt
     auxiliary_receipts: tuple[CommandReceipt, ...] = ()
+    phase: str = ""
+    policy_loss_eligible: bool | None = None
 
     def __post_init__(self) -> None:
         receipt = self.hand_receipt
@@ -573,6 +647,10 @@ class CollectionControlCycle:
                 "auxiliary_receipts may contain only Tianji arm receipts; "
                 "the cycle has exactly one Revo hand authority"
             )
+        if self.phase not in {"context", "precontact", "contact", "hold", "release"}:
+            raise ValueError("control cycle requires one explicit policy phase")
+        if not isinstance(self.policy_loss_eligible, bool):
+            raise ValueError("control cycle requires an explicit policy_loss_eligible boolean")
 
 
 def _native_sample(value: object) -> NativeSample:
@@ -919,15 +997,57 @@ class HardwareCollectionOrchestrator:
         metadata = {
             "task": str(episode["task"]),
             "instruction": str(episode["instruction"]),
+            **{
+                key: episode[key]
+                for key in (
+                    "task_id",
+                    "task_version",
+                    "object_id",
+                    "object_instance",
+                    "operator",
+                    "collection_day",
+                    "grasp_primitive",
+                    "instruction_source",
+                    "planner_revision",
+                    "planner_output_sha256",
+                )
+                if key in episode
+            },
             "hardware_collection": True,
             "synthetic_fixture": False,
             "action_label_source": "accepted_revo_hand_exact_sent_target",
             "emg_in_vla_projection": False,
             "emg_export_requires_human_reviewed_intervals": True,
+            "contains_cair_residual": False,
             "control_step_timeout_ms": float(runtime["control_step_timeout_ms"]),
+            "max_command_latency_ns": int(
+                round(float(runtime["max_command_latency_ms"]) * 1_000_000.0)
+            ),
             "shutdown_timeout_ms": float(runtime["shutdown_timeout_ms"]),
             "safety_watchdog_budget_ms": float(runtime["safety_watchdog_budget_ms"]),
             **dict(self.dependencies.metadata),
+            "tactile_profile": str(
+                _mapping(raw["tactile"], name="tactile")["vla_tactile_profile"]
+            ),
+            "checkpoint_family_id": str(
+                _mapping(raw["tactile"], name="tactile")["checkpoint_family_id"]
+            ),
+            "normalization_family_id": str(
+                _mapping(raw["tactile"], name="tactile")["normalization_family_id"]
+            ),
+            "capability_manifest_sha256": str(
+                _mapping(raw["tactile"], name="tactile")["capability_manifest_sha256"]
+            ),
+            "max_tactile_inter_finger_skew_ns": int(
+                _mapping(raw["tactile"], name="tactile")["max_inter_finger_skew_ns"]
+            ),
+            "camera_profile_id": str(
+                _mapping(raw["camera"], name="camera")["camera_profile_id"]
+            ),
+            "camera_calibration_sha256": str(
+                _mapping(raw["camera"], name="camera")["calibration_sha256"]
+            ),
+            "policy_annotations": [],
         }
         recorder = EpisodeRecorder(
             master_root,
@@ -1030,10 +1150,20 @@ class HardwareCollectionOrchestrator:
                         session.accept_command(receipt)
                     session.accept_command(cycle.hand_receipt)
                     decision_now = max(now_ns, cycle.hand_receipt.decision_timestamp_ns)
-                    session.record_anchor_if_due(
+                    recorded_anchor = session.record_anchor_if_due(
                         hand_command_request_id=cycle.hand_receipt.request_id,
                         now_ns=decision_now,
                     )
+                    if recorded_anchor is not None:
+                        annotations = recorder.metadata["policy_annotations"]
+                        assert isinstance(annotations, list)
+                        annotations.append(
+                            {
+                                "anchor_index": recorded_anchor.anchor_index,
+                                "phase": cycle.phase,
+                                "policy_loss_eligible": cycle.policy_loss_eligible,
+                            }
+                        )
                 await self._sleep(0.001)
         except BaseException as exc:
             failure = exc
@@ -1157,6 +1287,11 @@ class HardwareCollectionOrchestrator:
                     camera_stream=str(runtime.get("vla_camera_stream", "camera_rectified")),
                     state_stream=str(runtime.get("vla_state_stream", "revo_state")),
                     tactile_stream=str(runtime.get("vla_tactile_stream", "tactile")),
+                    tactile_profile=str(
+                        _mapping(raw["tactile"], name="tactile")[
+                            "vla_tactile_profile"
+                        ]
+                    ),
                     synthetic_fixture=False,
                 ),
             )

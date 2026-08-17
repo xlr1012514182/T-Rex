@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from dataclasses import replace
 
 from revo3_v1.policy import (
     CacheProtocolError,
@@ -11,6 +12,7 @@ from revo3_v1.policy import (
     TReXRevoPolicyAdapter,
     TReXPolicyRunner,
     TaskKey,
+    TemporalAggregationError,
 )
 
 
@@ -118,3 +120,52 @@ def test_policy_runner_issues_main_offsets_and_exposes_aggregated_target():
         global_step=4, task_key=fast.task_key, now_ns=110
     )
     assert target.shape == (21,)
+
+
+def test_stale_touch_skips_fast_refinement_without_reusing_old_sensor_data():
+    runner = TReXPolicyRunner(TReXRevoPolicyAdapter(MockTReXBackend()))
+    base = 1_000_000_000
+    slow_obs = _request(InferenceMode.SLOW_AND_FAST, 0, base).observation
+    runner.infer_if_due(global_step=0, observation=slow_obs, now_ns=base)
+    fast_time = base + 200_000_000
+    stale_touch = replace(
+        slow_obs,
+        timestamp_ns=fast_time,
+        state_timestamp_ns=fast_time,
+        rgb_timestamp_ns=fast_time,
+        tactile_timestamp_ns=base,
+    )
+    assert runner.infer_if_due(
+        global_step=4, observation=stale_touch, now_ns=fast_time
+    ) is None
+    assert runner.last_skip_reason == "stale_touch_fast_disabled"
+    assert runner.adapter.cache.current_chunk is not None
+
+
+def test_100hz_tick_linearly_interpolates_the_30hz_temporal_aggregate():
+    runner = TReXPolicyRunner(TReXRevoPolicyAdapter(MockTReXBackend()))
+    epoch = 1_000_000_000
+    observation = _request(InferenceMode.SLOW_AND_FAST, 0, epoch).observation
+    chunk = runner.infer_if_due(
+        global_step=0, observation=observation, now_ns=epoch
+    )
+    assert chunk is not None
+    half_tick = epoch + runner.schedule.action_period_ns // 2
+    interpolated = runner.interpolated_target_for_tick(
+        executor_timestamp_ns=half_tick,
+        action_epoch_ns=epoch,
+        task_key=observation.task_key,
+        now_ns=half_tick,
+    )
+    expected = 0.5 * (chunk.q_target_rad[0] + chunk.q_target_rad[1])
+    np.testing.assert_allclose(interpolated, expected, atol=1e-6)
+
+    with pytest.raises(TemporalAggregationError, match="no non-stale chunk covers"):
+        runner.interpolated_target_for_tick(
+            executor_timestamp_ns=(
+                epoch + runner.schedule.chunk_size * runner.schedule.action_period_ns
+            ),
+            action_epoch_ns=epoch,
+            task_key=observation.task_key,
+            now_ns=epoch,
+        )

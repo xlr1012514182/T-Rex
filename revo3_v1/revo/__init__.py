@@ -5,6 +5,9 @@ from .backend import (
     HardwareWriteNotArmed,
     MockRevoBackend,
     RevoBackend,
+    SDKBackendClosed,
+    SDKBackendFault,
+    SDKCallTimeout,
 )
 from .contracts import (
     JOINT_COUNT,
@@ -13,6 +16,13 @@ from .contracts import (
     RevoCommand,
     RevoState,
     assert_joint_vector,
+)
+from .completion import (
+    CompletionConfig,
+    CompletionMonitor,
+    CompletionPhase,
+    CompletionResult,
+    CompletionStatus,
 )
 from .pipeline import RevoCommandPipeline
 from .safety import (
@@ -24,6 +34,11 @@ from .safety import (
 
 __all__ = [
     "BrainCoSDKBackend",
+    "CompletionConfig",
+    "CompletionMonitor",
+    "CompletionPhase",
+    "CompletionResult",
+    "CompletionStatus",
     "HardwareWriteNotArmed",
     "JOINT_COUNT",
     "JOINT_ORDER",
@@ -37,5 +52,8 @@ __all__ = [
     "SafetyEnvelope",
     "SafetyResult",
     "SafetySupervisor",
+    "SDKBackendClosed",
+    "SDKBackendFault",
+    "SDKCallTimeout",
     "assert_joint_vector",
 ]

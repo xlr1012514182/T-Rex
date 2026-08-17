@@ -22,6 +22,8 @@ KEY_STATE = "observation.state"
 KEY_ACTION = "action"
 KEY_ACTION_ABS = "action_abs"
 KEY_TACTILE_F6 = "observation.tactile_f6"
+KEY_TACTILE_HISTORY_F6 = "observation.tactile_history_f6"
+KEY_TACTILE_DIFF = "observation.tactile_diff"
 KEY_IMAGE_FULL = "observation.images.full"
 KEY_IMAGE_CENTER = "observation.images.center"
 
@@ -38,6 +40,14 @@ def build_revo_feature_schema(
         KEY_TACTILE_F6: {
             "dtype": "float32",
             "shape": (TACTILE_FINGERS, TACTILE_DIMS),
+        },
+        KEY_TACTILE_HISTORY_F6: {
+            "dtype": "float32",
+            "shape": (TACTILE_HISTORY, TACTILE_FINGERS, TACTILE_DIMS),
+        },
+        KEY_TACTILE_DIFF: {
+            "dtype": "float32",
+            "shape": (TACTILE_FINGERS, 1, 240, 240),
         },
         KEY_IMAGE_FULL: {"dtype": "video", "shape": image_shape_chw},
         KEY_IMAGE_CENTER: {"dtype": "video", "shape": image_shape_chw},
@@ -61,10 +71,14 @@ class RevoEpisode:
     timestamp_ns: np.ndarray
     q_state_rad: np.ndarray
     q_action_abs_rad: np.ndarray
-    tactile_f6: np.ndarray
+    tactile_f6: Optional[np.ndarray]
     instruction: str
+    tactile_profile: str = "ablation_force6d_only"
+    tactile_history_f6: Optional[np.ndarray] = None
+    tactile_diff: Optional[np.ndarray] = None
     full_rgb: Optional[np.ndarray] = None
     center_rgb: Optional[np.ndarray] = None
+    rgb_timestamp_ns: Optional[np.ndarray] = None
     metadata: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -72,29 +86,67 @@ class RevoEpisode:
             raise ValueError("episode_id and instruction must be non-empty.")
         q_state = np.asarray(self.q_state_rad, dtype=np.float32)
         q_action = np.asarray(self.q_action_abs_rad, dtype=np.float32)
-        touch = np.asarray(self.tactile_f6, dtype=np.float32)
+        touch = None if self.tactile_f6 is None else np.asarray(self.tactile_f6, dtype=np.float32)
         if q_state.ndim != 2 or q_state.shape[1] != JOINT_COUNT:
             raise ValueError(f"q_state_rad must be [T,{JOINT_COUNT}], got {q_state.shape}.")
         length = q_state.shape[0]
         if q_action.shape != (length, JOINT_COUNT):
             raise ValueError(f"q_action_abs_rad must be [T,{JOINT_COUNT}], got {q_action.shape}.")
-        if touch.shape != (length, TACTILE_FINGERS, TACTILE_DIMS):
-            raise ValueError(
-                f"tactile_f6 must be [T,{TACTILE_FINGERS},{TACTILE_DIMS}], "
-                f"got {touch.shape}."
-            )
+        force_required = self.tactile_profile in {
+            "profile_a_force6d_diff", "ablation_force6d_only"
+        }
+        diff_required = self.tactile_profile in {
+            "profile_a_force6d_diff", "profile_b_diff_only"
+        }
+        if self.tactile_profile == "profile_c_pressure_matrix":
+            raise ValueError("Profile C has no native policy dataset/trainer yet")
+        if force_required:
+            if touch is None or touch.shape != (length, TACTILE_FINGERS, TACTILE_DIMS):
+                raise ValueError(f"{self.tactile_profile} requires tactile_f6 [T,5,6]")
+            history = np.asarray(self.tactile_history_f6, dtype=np.float32)
+            if history.shape != (length, TACTILE_HISTORY, TACTILE_FINGERS, TACTILE_DIMS):
+                raise ValueError("Force6D profiles require explicit native [T,16,5,6] histories")
+        else:
+            if touch is not None or self.tactile_history_f6 is not None:
+                raise ValueError("DIFF-only Profile B cannot carry fake Force6D/history")
+            history = None
+        if diff_required:
+            tactile_diff = np.asarray(self.tactile_diff, dtype=np.float32)
+            if tactile_diff.shape != (length, TACTILE_FINGERS, 1, 240, 240):
+                raise ValueError("Profile A/B requires tactile_diff [T,5,1,240,240]")
+        else:
+            if self.tactile_diff is not None:
+                raise ValueError("Force6D-only profile cannot carry DIFF")
+            tactile_diff = None
         if not np.isfinite(q_state).all() or not np.isfinite(q_action).all():
             raise ValueError("state/action contains NaN or infinity.")
-        if not np.isfinite(touch).all():
+        if touch is not None and not np.isfinite(touch).all():
             raise ValueError("tactile_f6 contains NaN or infinity.")
         timestamps = _time_vector(self.timestamp_ns, length=length)
-        metadata_keys = {str(key).lower() for key in self.metadata}
-        if any("emg" in key for key in metadata_keys):
+        def contains_emg_key(value: object) -> bool:
+            if isinstance(value, Mapping):
+                return any(
+                    "emg" in str(key).lower() or contains_emg_key(item)
+                    for key, item in value.items()
+                )
+            if isinstance(value, (list, tuple)):
+                return any(contains_emg_key(item) for item in value)
+            return False
+
+        if contains_emg_key(self.metadata):
             raise ValueError("EMG is not a T-Rex episode feature; keep it in a separate log.")
         object.__setattr__(self, "timestamp_ns", timestamps)
         object.__setattr__(self, "q_state_rad", q_state.copy())
         object.__setattr__(self, "q_action_abs_rad", q_action.copy())
-        object.__setattr__(self, "tactile_f6", touch.copy())
+        object.__setattr__(self, "tactile_f6", None if touch is None else touch.copy())
+        object.__setattr__(
+            self, "tactile_history_f6", None if history is None else history.copy()
+        )
+        object.__setattr__(self, "tactile_diff", None if tactile_diff is None else tactile_diff.copy())
+        if (self.full_rgb is None) != (self.center_rgb is None):
+            raise ValueError("full_rgb and center_rgb are one atomic two-view contract")
+        if self.full_rgb is None:
+            raise ValueError("Revo V1 policy episodes require full_rgb and fixed center_rgb")
         for name in ("full_rgb", "center_rgb"):
             value = getattr(self, name)
             if value is None:
@@ -103,6 +155,14 @@ class RevoEpisode:
             if images.shape[0] != length or images.ndim != 4 or images.shape[-1] != 3:
                 raise ValueError(f"{name} must be [T,H,W,3], got {images.shape}.")
             object.__setattr__(self, name, images.copy())
+        rgb_timestamps = (
+            timestamps
+            if self.rgb_timestamp_ns is None
+            else _time_vector(self.rgb_timestamp_ns, length=length)
+        )
+        if np.any(rgb_timestamps > timestamps):
+            raise ValueError("RGB timestamps cannot be later than policy anchor timestamps")
+        object.__setattr__(self, "rgb_timestamp_ns", rgb_timestamps.copy())
 
     @property
     def length(self) -> int:
@@ -116,8 +176,9 @@ class RevoTrainingSample:
     timestamp_ns: int
     state_q_rad: np.ndarray
     action_chunk_abs_rad: np.ndarray
-    tactile_f6: np.ndarray
-    tactile_history_f6: np.ndarray
+    tactile_f6: Optional[np.ndarray]
+    tactile_history_f6: Optional[np.ndarray]
+    tactile_diff: Optional[np.ndarray]
     instruction: str
     full_rgb: Optional[np.ndarray] = None
     center_rgb: Optional[np.ndarray] = None
@@ -129,11 +190,15 @@ class RevoTrainingSample:
             KEY_STATE: self.state_q_rad.copy(),
             KEY_ACTION: self.action_chunk_abs_rad.copy(),
             KEY_ACTION_ABS: self.action_chunk_abs_rad[0].copy(),
-            KEY_TACTILE_F6: self.tactile_history_f6.copy(),
             "task": self.instruction,
             "timestamp_ns": self.timestamp_ns,
             "episode_id": self.episode_id,
         }
+        if self.tactile_f6 is not None:
+            item[KEY_TACTILE_F6] = self.tactile_f6.copy()
+            item[KEY_TACTILE_HISTORY_F6] = self.tactile_history_f6.copy()
+        if self.tactile_diff is not None:
+            item[KEY_TACTILE_DIFF] = self.tactile_diff.copy()
         if self.full_rgb is not None:
             item[KEY_IMAGE_FULL] = self.full_rgb.copy()
         if self.center_rgb is not None:
@@ -149,7 +214,7 @@ class RevoEpisodeAdapter:
 
     @property
     def first_valid_anchor(self) -> int:
-        return TACTILE_HISTORY - 1
+        return 0
 
     @property
     def last_valid_anchor(self) -> int:
@@ -161,7 +226,6 @@ class RevoEpisodeAdapter:
             raise IndexError("anchor has fewer than 16 real tactile history samples.")
         if i > self.last_valid_anchor:
             raise IndexError("anchor has fewer than 16 future action targets.")
-        history_start = i - TACTILE_HISTORY + 1
         action_end = i + ACTION_CHUNK
         ep = self.episode
         return RevoTrainingSample(
@@ -170,14 +234,15 @@ class RevoEpisodeAdapter:
             timestamp_ns=int(ep.timestamp_ns[i]),
             state_q_rad=ep.q_state_rad[i].copy(),
             action_chunk_abs_rad=ep.q_action_abs_rad[i:action_end].copy(),
-            tactile_f6=ep.tactile_f6[i].copy(),
-            tactile_history_f6=ep.tactile_f6[history_start : i + 1].copy(),
+            tactile_f6=None if ep.tactile_f6 is None else ep.tactile_f6[i].copy(),
+            tactile_history_f6=None if ep.tactile_history_f6 is None else ep.tactile_history_f6[i].copy(),
+            tactile_diff=None if ep.tactile_diff is None else ep.tactile_diff[i].copy(),
             instruction=ep.instruction,
             full_rgb=None if ep.full_rgb is None else ep.full_rgb[i].copy(),
             center_rgb=None if ep.center_rgb is None else ep.center_rgb[i].copy(),
         )
 
-    def iter_samples(self, *, stride: int = 1) -> Iterator[RevoTrainingSample]:
+    def iter_samples(self, *, stride: int = 3) -> Iterator[RevoTrainingSample]:
         if stride <= 0:
             raise ValueError("stride must be positive.")
         if self.last_valid_anchor < self.first_valid_anchor:

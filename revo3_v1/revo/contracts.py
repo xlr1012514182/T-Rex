@@ -73,6 +73,7 @@ class RevoState:
     current_a: np.ndarray = field(default_factory=_zeros)
     status: np.ndarray = field(default_factory=lambda: np.zeros(JOINT_COUNT, dtype=np.int64))
     sequence: int = 0
+    temperature_c: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
         if self.timestamp_ns < 0:
@@ -90,6 +91,11 @@ class RevoState:
         if status.shape != (JOINT_COUNT,):
             raise ValueError(f"status must have shape ({JOINT_COUNT},), got {status.shape}.")
         object.__setattr__(self, "status", status.copy())
+        if self.temperature_c is not None:
+            temperature = assert_joint_vector(
+                self.temperature_c, name="temperature_c"
+            )
+            object.__setattr__(self, "temperature_c", temperature)
 
 
 @dataclass(frozen=True)

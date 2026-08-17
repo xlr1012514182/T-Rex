@@ -141,7 +141,7 @@ revo3-hardware-collect `
   --allow-hardware-write
 ```
 
-运行时职责固定为：原生频率 source 入账、独立 source watchdog、30 Hz `latest-not-after` anchor、每个 anchor 对应唯一 accepted Revo `exact_sent_target`、故障时停止 target 生产并依次执行 Revo hold/Tianji soft-stop、episode quarantine，以及成功后生成不含 EMG/手套/Tianji 的 VLA allowlist 视图。readiness 强制 EMG 与配置的 camera/state/tactile 三路都有 required timeout；三路 VLA stream 必须唯一、已进入 anchor、与 source role 一致且有 timeout。`control_step_timeout_ms` 必须不超过总体 `safety_watchdog_budget_ms`；control driver 卡住会触发 fault，而不是停住 watchdog。`shutdown_timeout_ms` 同时约束 sensor task、辅助 source stop 和 dependency close，超时会标记需要进程/设备干预并 quarantine，绝不声称 clean close。close 被放在原子 commit 之前，所以关闭失败不会发布可训练 episode。原始 EMG 只保留在 master；必须另行提供人工复核的 OPEN/CLOSE 区间，才能导出到独立 `emg_review_root` 数据产品。若手套 IPC 被标为 episode-required，其每个 stream 同样必须配置 watchdog timeout；若明确标为诊断流则不会参与 episode commit 健康门。
+运行时职责固定为：原生频率 source 入账、独立 source watchdog、30 Hz `latest-not-after` anchor、每个 anchor 对应唯一 accepted Revo `exact_sent_target`、故障时停止 target 生产并依次执行 Revo hold/Tianji soft-stop、episode quarantine，以及成功后生成不含 EMG/手套/Tianji 的 VLA allowlist 视图。readiness 强制 EMG 与配置的 camera/state/tactile 三路都有 required timeout；三路 VLA stream 必须唯一、已进入 anchor、与 source role 一致且有 timeout。`control_step_timeout_ms` 必须不超过总体 `safety_watchdog_budget_ms`；control driver 卡住会触发 fault，而不是停住 watchdog。`shutdown_timeout_ms` 同时约束 sensor task、辅助 source stop 和 dependency close，超时会标记需要进程/设备干预并 quarantine，绝不声称 clean close。close 被放在原子 commit 之前，所以关闭失败不会发布可训练 episode。原始 EMG 只保留在 master；必须另行提供人工复核的 `POWER_GRASP / PRECISION_GRASP / LATERAL_GRASP / RELEASE / REST` 区间，才能导出到独立 `emg_review_root` 数据产品。若手套 IPC 被标为 episode-required，其每个 stream 同样必须配置 watchdog timeout；若明确标为诊断流则不会参与 episode commit 健康门。
 
 BrainCo 手套和 BrainCo EDU EMG 都依赖 `libedu` 的模块级全局 callback，**不能在同一进程同时注册**。启用手套时，配置只接受 `external_timestamped_ipc`：手套 client 在独立采集进程运行，携带明确 clock domain/offset-drift 证据汇入 recorder。公共编排器不会覆盖 callback，也不会猜测 6-flex→21DoF 或 wrist→Tianji 映射；这些映射只能由哈希核验、带标定版本的现场插件提供。
 
@@ -349,18 +349,18 @@ outputs/teleop_mock/derived/revo3_vla/<episode_id>/
 - retargeter 中间 target；
 - 未获准或未写入的手部 target。
 
-导出完成后还会调用现有 `RevoEpisode.load()` 复核 schema，且元数据必须声明 `contains_emg=false`。EMG 二分类数据由 `export_emg_binary_dataset()` 写入另一个物理目录；不得通过“训练时忽略若干 key”的方式直接消费 master。两个派生产品可以共享 episode/session provenance ID，但不能共享一个训练 schema 或被误拼接为联合 VLA token。
+导出完成后还会调用现有 `RevoEpisode.load()` 复核 schema，且元数据必须声明 `contains_emg=false`。EMG 五类主线数据由 `export_emg_dataset()` 写入另一个物理目录；`export_emg_binary_dataset()` 只保留给旧 OPEN/CLOSE smoke。不得通过“训练时忽略若干 key”的方式直接消费 master。两个派生产品可以共享 episode/session provenance ID，但不能共享一个训练 schema 或被误拼接为联合 VLA token。
 
-EMG exporter 只接受显式、人工复核的 OPEN/CLOSE 时间区间。窗口必须完整落在一个标签区间内、无 lead-off、无超阈值采样间隙；标签绝不由手套轨迹或机器人命令推断。默认输出 1 秒窗口（250 点）和 0.5 秒 stride，并强制以 `subject_id` 为 split 单元：
+EMG exporter 只接受显式、人工复核的五类原语时间区间。窗口必须完整落在一个标签区间内、无 lead-off、无超阈值采样间隙；标签绝不由手套轨迹或机器人命令推断。主线先在每段连续 session 上执行 8ch@250 Hz 的因果预处理，再输出 2 秒窗口（500 点）和 0.5 秒 stride（125 点），并强制以 `subject_id` 为 split 单元：
 
 ```python
 from revo3_teleop.recording import (
     EMGLabelInterval,
     EMGSessionSpec,
-    export_emg_binary_dataset,
+    export_emg_dataset,
 )
 
-dataset = export_emg_binary_dataset(
+dataset = export_emg_dataset(
     sessions=(
         EMGSessionSpec(
             episode_root=committed_episode,
@@ -371,7 +371,7 @@ dataset = export_emg_binary_dataset(
                 EMGLabelInterval(
                     start_timestamp_ns=start_ns,
                     end_timestamp_ns=end_ns,
-                    label=1,  # CLOSE
+                    label=0,  # POWER_GRASP；索引来自冻结的五类词表
                     source="protocol_cue_human_reviewed",
                     human_reviewed=True,
                 ),
@@ -379,7 +379,7 @@ dataset = export_emg_binary_dataset(
         ),
         # val/test 必须来自不同 subject；此处省略。
     ),
-    output_root="derived/emg_binary_v1",
+    output_root="derived/emg_primitives_v1",
 )
 ```
 

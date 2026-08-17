@@ -1,7 +1,7 @@
 import unittest
 
 from revo3_v1.demo import DemoConfig, run
-from revo3_v1.planner import SupportedTask
+from revo3_v1.planner import SupportedTask, TASK_GRASP_PRIMITIVES
 
 
 class DemoTest(unittest.TestCase):
@@ -18,6 +18,9 @@ class DemoTest(unittest.TestCase):
             with self.subTest(task=task.value):
                 result = run(DemoConfig(task=task, emulate_release=False))
                 self.assertEqual(result["stable_output"], "HOLD")
+                self.assertEqual(result["primitive"], TASK_GRASP_PRIMITIVES[task].value)
+                style = TASK_GRASP_PRIMITIVES[task].value.removesuffix("_GRASP").lower()
+                self.assertIn(f"{style} grasp", result["instruction"].lower())
 
 
 if __name__ == "__main__":

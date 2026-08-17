@@ -294,20 +294,33 @@ class Qwen3VLVLAModel(nn.Module):
         if not self.use_tactile_deform:
             return
         if not os.path.exists(ckpt_path):
-            print(f"Warning: DeformEncoder checkpoint not found at {ckpt_path}")
-            return
+            raise FileNotFoundError(f"DeformEncoder checkpoint not found at {ckpt_path}")
         print(f"Loading DeformEncoder weights from {ckpt_path} ...")
-        checkpoint = torch.load(ckpt_path, map_location="cpu")
-        state_dict = checkpoint.get("state_dict", checkpoint)
-        encoder_sd = {}
-        for k, v in state_dict.items():
-            if k.startswith("encoder."):
-                encoder_sd[k[len("encoder."):]] = v
-            elif k in self.deform_encoder.state_dict():
-                encoder_sd[k] = v
-        missing, _ = self.deform_encoder.load_state_dict(encoder_sd, strict=False)
-        if missing:
-            print(f"  DeformEncoder missing keys: {missing}")
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        if isinstance(checkpoint, dict) and "encoder_state" in checkpoint:
+            encoder_sd = checkpoint["encoder_state"]
+        else:
+            state_dict = checkpoint.get("state_dict", checkpoint)
+            encoder_sd = {
+                (key[len("encoder."):] if key.startswith("encoder.") else key): value
+                for key, value in state_dict.items()
+                if key.startswith("encoder.") or key in self.deform_encoder.state_dict()
+            }
+        expected = self.deform_encoder.state_dict()
+        missing = sorted(set(expected) - set(encoder_sd))
+        unexpected = sorted(set(encoder_sd) - set(expected))
+        mismatched = sorted(
+            key
+            for key in set(expected) & set(encoder_sd)
+            if tuple(expected[key].shape) != tuple(encoder_sd[key].shape)
+        )
+        if missing or unexpected or mismatched:
+            raise RuntimeError(
+                "Revo DeformEncoder checkpoint is incomplete/incompatible: "
+                f"missing={missing[:8]}, unexpected={unexpected[:8]}, "
+                f"shape_mismatch={mismatched[:8]}"
+            )
+        self.deform_encoder.load_state_dict(encoder_sd, strict=True)
         print("DeformEncoder weights loaded.")
 
     def load_tactile_vqvae(self, ckpt_path_or_blob):
@@ -323,12 +336,7 @@ class Qwen3VLVLAModel(nn.Module):
         blob = ckpt_path_or_blob
         if isinstance(blob, str):
             blob = torch.load(blob, map_location="cpu", weights_only=False)
-        missing, unexpected = self.tactile_vqvae.load_state_dict(
-            blob["model_state"], strict=False)
-        if missing:
-            print(f"  [tactile_vqvae] missing keys: {missing[:6]} ...")
-        if unexpected:
-            print(f"  [tactile_vqvae] unexpected keys: {unexpected[:6]} ...")
+        self.tactile_vqvae.load_state_dict(blob["model_state"], strict=True)
         stats = blob["stats"]
         minimum = torch.as_tensor(stats["tacf6_min"], dtype=torch.float32)
         maximum = torch.as_tensor(stats["tacf6_max"], dtype=torch.float32)

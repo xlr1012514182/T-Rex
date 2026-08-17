@@ -2,7 +2,7 @@ Command:
   py -3.10 E:\CodexData\skills\robotics-repo-reproduction-audit\scripts\audit_reproduction_matrix.py audit\revo3_v1_reproduction_matrix.csv --outcome component-verified --require-reviewed --json
 
 Result:
-  rows: 22
+  rows: 24
   outcome: component-verified
   errors: []
   warnings: []
@@ -25,6 +25,8 @@ Interpretation:
   [16,21]. The second result validates the schema and declared synthetic-fixture
   invariants only. The manifest records training_approved=false,
   task_success_defined=false, no hardware replay, and zero task-success rates.
+  The added online-composition and training-contract rows are mock/contract
+  verification only; they do not claim a trained Revo checkpoint.
 
 Remote evidence integrity check:
   audit/remote_gpu_smoke_20260817/MANIFEST.sha256

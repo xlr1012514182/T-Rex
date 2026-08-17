@@ -85,10 +85,77 @@ def test_real_write_requires_explicit_arm_and_converts_back_to_degrees():
             slave_id=7,
             allow_hardware_write=True,
             capability_probe_confirmed=True,
+            temperature_telemetry_verified=True,
+            soft_stop_callback=lambda client, slave_id, reason: None,
+            soft_stop_capability_verified=True,
+            collision_profile_id="bench-profile-sha256",
+            collision_profile_verified=True,
         )
         await armed.write_command(command)
         assert sdk.written[0] == 7
         np.testing.assert_allclose(sdk.written[1], 90.0, atol=1e-5)
+
+    asyncio.run(run())
+
+
+def test_real_soft_stop_requires_injected_verified_non_auto_clear_profile():
+    async def run():
+        sdk = _FakeSDK()
+        called = []
+        blocked = BrainCoSDKBackend(sdk, slave_id=7)
+        with pytest.raises(HardwareWriteNotArmed, match="SoftStop blocked"):
+            await blocked.soft_stop("collision")
+        backend = BrainCoSDKBackend(
+            sdk,
+            slave_id=7,
+            soft_stop_callback=lambda client, slave_id, reason: called.append(
+                (client, slave_id, reason)
+            ),
+            soft_stop_capability_verified=True,
+            collision_profile_id="bench-profile-sha256",
+            collision_profile_verified=True,
+        )
+        await backend.soft_stop("motor_fault_or_stall")
+        assert called == [(sdk, 7, "motor_fault_or_stall")]
+
+    asyncio.run(run())
+
+
+def test_collision_profile_contract_is_frozen_and_never_auto_clears():
+    with pytest.raises(ValueError, match="100 ms"):
+        BrainCoSDKBackend(_FakeSDK(), slave_id=7, collision_debounce_ms=99)
+    with pytest.raises(ValueError, match="50 ms"):
+        BrainCoSDKBackend(_FakeSDK(), slave_id=7, collision_status_cache_ms=51)
+    with pytest.raises(ValueError, match="disabled"):
+        BrainCoSDKBackend(_FakeSDK(), slave_id=7, collision_auto_clear=True)
+
+
+def test_sdk_temperature_reader_is_explicit_and_shape_checked():
+    async def run():
+        backend = BrainCoSDKBackend(
+            _AtomicFakeSDK(),
+            slave_id=7,
+            temperature_reader=lambda client, slave_id: [31.0] * 21,
+            temperature_telemetry_verified=True,
+        )
+        state = await backend.read_state()
+        np.testing.assert_allclose(state.temperature_c, 31.0)
+
+    asyncio.run(run())
+
+
+def test_direct_real_write_requires_verified_temperature_telemetry():
+    async def run():
+        sdk = _FakeSDK()
+        backend = BrainCoSDKBackend(
+            sdk,
+            slave_id=7,
+            allow_hardware_write=True,
+            capability_probe_confirmed=True,
+        )
+        with pytest.raises(HardwareWriteNotArmed, match="temperature_telemetry_verified"):
+            await backend.write_command(RevoCommand(1, np.zeros(21), "task", 0))
+        assert sdk.written is None
 
     asyncio.run(run())
 

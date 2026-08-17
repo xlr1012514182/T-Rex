@@ -7,13 +7,13 @@
 The bounded chain that passed is:
 
 ```text
-synthetic EMG event + mock RGB planner response
+synthetic five-class EMG edge + mock three-full/center RGB planner response
 → causal multi-rate alignment
 → single Task Executive
-→ Revo3 21D mock T-Rex policy contract
+→ asynchronous Revo3 21D mock T-Rex policy contract
 → strict T-Rex REP wire-protocol client contract
 → bounded tactile residual
-→ final safety supervisor
+→ 100 Hz single-writer servo and final safety supervisor
 → in-memory Revo backend
 ```
 
@@ -27,7 +27,7 @@ The ZeroMQ client is covered locally with an injected request/reply transport, i
 |---|---|---|---|
 | [Official T-Rex repository](https://github.com/ZhuoyangLiu2005/T-Rex) | `main@09db9f3b3e3936fb760e67329174bd2bed527a05` | Base repository and slow/fast design | Base aligned; Revo adaptation intentionally diverges |
 | [T-Rex paper](https://arxiv.org/abs/2606.17055) | arXiv 2606.17055 | Architecture/tactile-reactive reference | No paper protocol run |
-| [Generic neuromotor interface](https://www.nature.com/articles/s41586-025-09255-w) | Nature 645, 702–711 (2025) | EMG topology reference | OPEN/CLOSE adaptation; synthetic data only |
+| [Generic neuromotor interface](https://www.nature.com/articles/s41586-025-09255-w) | Nature 645, 702–711 (2025) | EMG topology reference | Explicit 8ch@250 Hz, five-class primitive adaptation; synthetic smoke only |
 | [Ask-to-Clarify](https://arxiv.org/abs/2509.15061) | arXiv 2509.15061v3 | Planner states and ambiguity handling | Structural adaptation, not reproduction |
 | [Qwen3-VL-2B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct) | commit `89644892e4d85e24eaac8bacfd4f463576704203` | Lazy real-planner backend | Exact revision loaded; bounded generation and strict planner-schema smoke passed |
 | [TactileReflex](https://arxiv.org/abs/2605.23568) | arXiv 2605.23568 | Bounded residual inspiration | Partial local abstraction only |
@@ -43,7 +43,9 @@ The concise promotion and exclusion boundary is in
 From the repository root:
 
 ```powershell
-py -3.10 -m pytest -q tests/revo3_v1
+py -3.10 -m pytest -q tests/revo3_v1  # 288 passed
+
+py -3.10 -m pytest -q                 # 425 passed
 
 py -3.10 scripts/revo3_v1_generate_robot_demo.py `
   --output outputs/revo3_audit_mock/dataset `

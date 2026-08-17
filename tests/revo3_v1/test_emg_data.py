@@ -7,6 +7,8 @@ import numpy as np
 
 from revo3_v1.emg.data import fit_train_normalization, load_manifest, verify_split_manifests
 from revo3_v1.emg.synthetic import SyntheticEMGConfig, generate_synthetic_dataset
+from revo3_v1.emg.primitives import MAINLINE_CLASS_LABELS
+from revo3_v1.emg.preprocessing import BRAINCO_EDU_8CH_250HZ, validate_npz_profile
 
 
 class SyntheticEMGDataTest(unittest.TestCase):
@@ -49,6 +51,53 @@ class SyntheticEMGDataTest(unittest.TestCase):
         stats = fit_train_normalization(signals, [0, 1])
         np.testing.assert_allclose(stats["mean"], [2.0, 2.0])
         self.assertTrue(np.all(stats["std"] < 2.0))
+
+    def test_explicit_mainline_fixture_uses_frozen_five_class_vocabulary(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            metadata = generate_synthetic_dataset(
+                root,
+                SyntheticEMGConfig(
+                    n_subjects=3,
+                    sessions_per_subject=1,
+                    windows_per_label_per_session=1,
+                    n_channels=8,
+                    sample_rate_hz=250,
+                    window_seconds=2.0,
+                    window_stride_seconds=2.1,
+                    label_names=tuple(MAINLINE_CLASS_LABELS),
+                ),
+            )
+            with np.load(root / "windows.npz", allow_pickle=False) as archive:
+                self.assertEqual(archive["signal"].shape[1:], (8, 500))
+                self.assertEqual(set(archive["label"].tolist()), set(range(5)))
+                state = validate_npz_profile(archive, BRAINCO_EDU_8CH_250HZ)
+                self.assertFalse(state.preprocessed)
+                self.assertEqual(
+                    tuple(archive["channel_order"].tolist()),
+                    BRAINCO_EDU_8CH_250HZ.channel_order,
+                )
+            self.assertEqual(
+                list(metadata["labels"].values()), list(MAINLINE_CLASS_LABELS)
+            )
+            self.assertIn("synthetic CI fixture", metadata["verification_scope"])
+
+    def test_mainline_fixture_rejects_a_sampling_domain_mismatch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(ValueError, "frozen BrainCo"):
+                generate_synthetic_dataset(
+                    Path(temporary),
+                    SyntheticEMGConfig(
+                        n_subjects=3,
+                        sessions_per_subject=1,
+                        windows_per_label_per_session=1,
+                        n_channels=8,
+                        sample_rate_hz=200,
+                        window_seconds=2.0,
+                        window_stride_seconds=2.1,
+                        label_names=tuple(MAINLINE_CLASS_LABELS),
+                    ),
+                )
 
 
 if __name__ == "__main__":

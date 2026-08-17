@@ -61,6 +61,10 @@ from .tianji import (
     assess_hardware_config,
 )
 from .visiontouch import (
+    VISIONTOUCH_DIFF_SHAPE,
+    VISIONTOUCH_PROFILE_DIFF_ONLY,
+    VISIONTOUCH_PROFILE_FORCE6D,
+    VISIONTOUCH_PROFILE_FORCE6D_DIFF,
     VisionTouchForce6DConfig,
     VisionTouchForce6DSource,
     VisionTouchProbeReport,
@@ -105,6 +109,10 @@ __all__ = [
     "VisionTouchForce6DConfig",
     "VisionTouchForce6DSource",
     "VisionTouchProbeReport",
+    "VISIONTOUCH_DIFF_SHAPE",
+    "VISIONTOUCH_PROFILE_DIFF_ONLY",
+    "VISIONTOUCH_PROFILE_FORCE6D",
+    "VISIONTOUCH_PROFILE_FORCE6D_DIFF",
     "probe_opencv_camera",
     "assemble_tianji_hardware",
     "assess_hardware_config",

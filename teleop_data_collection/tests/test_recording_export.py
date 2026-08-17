@@ -33,7 +33,13 @@ def sample(source: str, sequence: int, timestamp_ns: int, **payload) -> NativeSa
     )
 
 
-def add_cycle(recorder: EpisodeRecorder, index: int, exact_value: float) -> None:
+def add_cycle(
+    recorder: EpisodeRecorder,
+    index: int,
+    exact_value: float,
+    *,
+    diff_only: bool = False,
+) -> None:
     anchor_ns = recorder.anchor_timestamp_ns(index)
     capture_ns = anchor_ns - 1_000
     recorder.append(
@@ -49,9 +55,17 @@ def add_cycle(recorder: EpisodeRecorder, index: int, exact_value: float) -> None
         "revo_state",
         sample("revo", index, capture_ns, q_rad=np.full(21, index * 0.01, np.float32)),
     )
+    tactile_payload = {
+        "tactile_diff": np.full((5, 240, 240), index, np.uint8),
+        "tactile_diff_timestamp_ns": np.full(5, capture_ns, np.int64),
+    }
+    if not diff_only:
+        tactile_payload.update({
+            "features": np.full((5, 6), index, np.float32),
+            "force6d_finger_timestamp_ns": np.full(5, capture_ns, np.int64),
+        })
     recorder.append(
-        "tactile",
-        sample("u21vt", index, capture_ns, features=np.full((5, 6), index, np.float32)),
+        "tactile", sample("u21vt", index, capture_ns, **tactile_payload)
     )
     # These native-rate streams deliberately coexist only in the master episode.
     recorder.append(
@@ -101,8 +115,10 @@ def test_allowlist_projection_uses_exact_sent_target_and_loads(tmp_path: Path) -
         },
     )
     recorder.start()
-    add_cycle(recorder, 0, 0.11)
-    add_cycle(recorder, 1, 0.22)
+    for index in range(15):
+        add_cycle(recorder, index, 0.01)
+    add_cycle(recorder, 15, 0.11)
+    add_cycle(recorder, 16, 0.22)
     committed = recorder.commit()
 
     derived = export_revo3_episode(
@@ -113,6 +129,7 @@ def test_allowlist_projection_uses_exact_sent_target_and_loads(tmp_path: Path) -
     episode = RevoEpisode.load(derived)
     assert episode.state_rad.shape == (2, 21)
     assert episode.tactile_features.shape == (2, 5, 6)
+    assert episode.tactile_diff.shape == (2, 5, 240, 240)
     np.testing.assert_allclose(episode.action_target_rad[0], 0.11)
     np.testing.assert_allclose(episode.action_target_rad[1], 0.22)
     # Neither the requested target (0.9) nor pre-write authorized target (0.5)
@@ -143,8 +160,8 @@ def test_export_rejects_sample_received_after_controller_decision(tmp_path: Path
         metadata={"task": "bottle", "instruction": "Grasp the bottle."},
     )
     recorder.start()
-    add_cycle(recorder, 0, 0.1)
-    add_cycle(recorder, 1, 0.2)
+    for index in range(17):
+        add_cycle(recorder, index, 0.1 + index * 0.01)
     committed = recorder.commit()
 
     receipt_rows = [
@@ -155,8 +172,8 @@ def test_export_rejects_sample_received_after_controller_decision(tmp_path: Path
     index_rows = [
         json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()
     ]
-    index_rows[0]["header"]["receive_timestamp_ns"] = (
-        int(receipt_rows[0]["decision_timestamp_ns"]) + 1
+    index_rows[15]["header"]["receive_timestamp_ns"] = (
+        int(receipt_rows[15]["decision_timestamp_ns"]) + 1
     )
     index_path.write_text(
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in index_rows),
@@ -169,3 +186,35 @@ def test_export_rejects_sample_received_after_controller_decision(tmp_path: Path
             tmp_path / "derived",
             Revo3ExportConfig(synthetic_fixture=True),
         )
+
+
+def test_profile_b_diff_only_exports_without_fake_force6d(tmp_path: Path) -> None:
+    recorder = EpisodeRecorder(
+        tmp_path / "master",
+        episode_id="diff_only_session",
+        epoch_ns=5_000_000_000,
+        metadata={
+            "task": "phone",
+            "instruction": "Grasp the phone securely.",
+        },
+    )
+    recorder.start()
+    add_cycle(recorder, 0, 0.1, diff_only=True)
+    add_cycle(recorder, 1, 0.2, diff_only=True)
+    committed = recorder.commit()
+    derived = export_revo3_episode(
+        committed,
+        tmp_path / "derived",
+        Revo3ExportConfig(
+            synthetic_fixture=True,
+            tactile_profile="profile_b_diff_only",
+        ),
+    )
+    episode = RevoEpisode.load(derived)
+    assert episode.tactile_features is None
+    assert episode.touch_timestamp_ns is None
+    assert episode.tactile_diff.shape == (2, 5, 240, 240)
+    with np.load(derived / "frames.npz", allow_pickle=False) as archive:
+        assert "tactile_features" not in archive.files
+        assert "touch_timestamp_ns" not in archive.files
+        assert "tactile_history_f6" not in archive.files

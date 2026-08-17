@@ -336,7 +336,11 @@ class RealSensorRunner:
                     asyncio.create_task(
                         self._periodic(
                             self.config.visiontouch_hz,
-                            self.visiontouch.poll_force6d,
+                            (
+                                self.visiontouch.poll
+                                if callable(getattr(self.visiontouch, "poll", None))
+                                else self.visiontouch.poll_force6d
+                            ),
                             self.config.visiontouch_stream,
                             threaded=True,
                         )

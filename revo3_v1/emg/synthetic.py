@@ -9,8 +9,12 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 import numpy as np
 
+from .primitives import MAINLINE_CLASS_LABELS
+from .preprocessing import BRAINCO_EDU_8CH_250HZ
+
 
 LABEL_NAMES: Mapping[int, str] = {0: "OPEN", 1: "CLOSE"}
+BINARY_LABELS: Tuple[str, ...] = ("OPEN", "CLOSE")
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,7 @@ class SyntheticEMGConfig:
     seed: int = 20260817
     train_fraction: float = 0.70
     val_fraction: float = 0.15
+    label_names: Tuple[str, ...] = BINARY_LABELS
 
     @property
     def n_samples(self) -> int:
@@ -52,6 +57,16 @@ class SyntheticEMGConfig:
             raise ValueError("train_fraction must be in (0, 1)")
         if not 0.0 < self.val_fraction < 1.0 - self.train_fraction:
             raise ValueError("val_fraction must leave a non-empty test fraction")
+        if tuple(self.label_names) not in {BINARY_LABELS, tuple(MAINLINE_CLASS_LABELS)}:
+            raise ValueError("synthetic fixture labels must be binary or the frozen five-class set")
+        if tuple(self.label_names) == tuple(MAINLINE_CLASS_LABELS) and (
+            self.n_channels != BRAINCO_EDU_8CH_250HZ.channel_count
+            or self.sample_rate_hz != BRAINCO_EDU_8CH_250HZ.sample_rate_hz
+            or self.n_samples != BRAINCO_EDU_8CH_250HZ.window_samples
+        ):
+            raise ValueError(
+                "five-class synthetic fixture must match the frozen BrainCo 8ch@250Hz/2s profile"
+            )
 
 
 def _subject_split(config: SyntheticEMGConfig, rng: np.random.RandomState) -> Dict[str, List[str]]:
@@ -99,12 +114,28 @@ def _make_window(
     envelope = _burst_envelope(n, rng)
     half = max(1, channels // 2)
     preferred = np.zeros(channels, dtype=np.float32)
-    if label == 1:  # CLOSE / flexor-like group
-        preferred[:half] = 1.0
-        preferred[half:] = 0.30
-    else:  # OPEN / extensor-like group
-        preferred[:half] = 0.30
-        preferred[half:] = 1.0
+    if tuple(config.label_names) == BINARY_LABELS:
+        if label == 1:  # CLOSE / flexor-like group
+            preferred[:half] = 1.0
+            preferred[half:] = 0.30
+        else:  # OPEN / extensor-like group
+            preferred[:half] = 0.30
+            preferred[half:] = 1.0
+    else:
+        # Deliberately simple, separable CI patterns.  They only verify the
+        # five-class plumbing and are not a physiological EMG simulator.
+        preferred[:] = 0.20
+        if label == 0:  # POWER_GRASP
+            preferred[:half] = 1.0
+        elif label == 1:  # PRECISION_GRASP
+            preferred[::2] = 0.90
+        elif label == 2:  # LATERAL_GRASP
+            preferred[: max(1, channels // 4)] = 0.85
+            preferred[-max(1, channels // 4) :] = 1.0
+        elif label == 3:  # RELEASE
+            preferred[half:] = 1.0
+        elif label == 4:  # REST
+            preferred[:] = 0.03
     preferred = preferred[channel_permutation]
 
     signal = rng.normal(0.0, 0.035, size=(channels, n)).astype(np.float32)
@@ -184,7 +215,8 @@ def generate_synthetic_dataset(output_dir: str | Path, config: SyntheticEMGConfi
             session_gain = session_rng.lognormal(mean=0.0, sigma=0.08, size=config.n_channels).astype(np.float32)
             session_base_ns = 1_700_000_000_000_000_000 + subject_index * 10**14 + session_index * 10**12
             ordered_labels = np.tile(
-                np.asarray([0, 1], dtype=np.int64), config.windows_per_label_per_session
+                np.arange(len(config.label_names), dtype=np.int64),
+                config.windows_per_label_per_session,
             )
             session_rng.shuffle(ordered_labels)
             for local_index, label_value in enumerate(ordered_labels.tolist()):
@@ -208,19 +240,28 @@ def generate_synthetic_dataset(output_dir: str | Path, config: SyntheticEMGConfi
                         "window_start_ns": start_ns,
                         "window_end_ns": start_ns + duration_ns,
                         "label": int(label_value),
-                        "label_name": LABEL_NAMES[int(label_value)],
+                        "label_name": config.label_names[int(label_value)],
                     }
                 )
 
-    np.savez_compressed(
-        output / "windows.npz",
-        signal=np.stack(signals).astype(np.float32),
-        label=np.asarray(labels, dtype=np.int64),
-        subject_id=np.asarray(subject_ids),
-        session_id=np.asarray(session_ids),
-        window_start_ns=np.asarray(window_start_ns, dtype=np.int64),
-        sample_rate_hz=np.asarray(config.sample_rate_hz, dtype=np.int64),
-    )
+    archive = {
+        "signal": np.stack(signals).astype(np.float32),
+        "label": np.asarray(labels, dtype=np.int64),
+        "subject_id": np.asarray(subject_ids),
+        "session_id": np.asarray(session_ids),
+        "window_start_ns": np.asarray(window_start_ns, dtype=np.int64),
+        "sample_rate_hz": np.asarray(config.sample_rate_hz, dtype=np.int64),
+    }
+    is_mainline_fixture = tuple(config.label_names) == tuple(MAINLINE_CLASS_LABELS)
+    if is_mainline_fixture:
+        archive.update(
+            {
+                "channel_order": np.asarray(BRAINCO_EDU_8CH_250HZ.channel_order),
+                "preprocessing_profile_id": np.asarray(BRAINCO_EDU_8CH_250HZ.profile_id),
+                "preprocessed": np.asarray(False),
+            }
+        )
+    np.savez_compressed(output / "windows.npz", **archive)
     for split_name, rows in rows_by_split.items():
         _write_jsonl(manifest_dir / f"{split_name}.jsonl", rows)
 
@@ -228,12 +269,18 @@ def generate_synthetic_dataset(output_dir: str | Path, config: SyntheticEMGConfi
         "schema_version": "revo3-emg-synthetic-v1",
         "generator": "synthetic-demo-not-human-data",
         "config": asdict(config),
-        "labels": {str(key): value for key, value in LABEL_NAMES.items()},
+        "labels": {str(key): value for key, value in enumerate(config.label_names)},
+        "verification_scope": "synthetic CI fixture only; no physiological or clinical claim",
         "split_unit": "subject_id",
         "split_subjects": split_subjects,
         "counts": {name: len(rows) for name, rows in rows_by_split.items()},
         "total_windows": len(signals),
         "signal_shape": [len(signals), config.n_channels, config.n_samples],
+        "preprocessing_profile_id": (
+            BRAINCO_EDU_8CH_250HZ.profile_id if is_mainline_fixture else None
+        ),
+        "preprocessed": False,
+        "filter_state_provenance": "",
         "future_leakage_policy": (
             "All windows from a subject are assigned to exactly one split; "
             "manifests are produced before any model normalization is computed."

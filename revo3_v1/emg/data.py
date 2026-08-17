@@ -8,6 +8,12 @@ from typing import Dict, Iterable, List, Mapping, Sequence
 
 import numpy as np
 
+from .preprocessing import (
+    EmgPreprocessingProfile,
+    preprocess_emg_windows,
+    validate_npz_profile,
+)
+
 
 def load_manifest(path: str | Path) -> List[Dict[str, object]]:
     manifest_path = Path(path)
@@ -72,12 +78,38 @@ class EMGWindowDataset(Dataset):
         manifest_path: str | Path,
         normalization: Mapping[str, np.ndarray] | None = None,
         channel_rotation: int = 0,
+        preprocessing_profile: EmgPreprocessingProfile | None = None,
+        allow_unprofiled_fixture: bool = False,
+        preprocessed_signals: np.ndarray | None = None,
+        allow_window_reset_fallback: bool = False,
     ) -> None:
         if torch is None:
             raise ImportError("PyTorch is required for EMGWindowDataset")
         with np.load(Path(npz_path), allow_pickle=False) as archive:
             self.signals = np.asarray(archive["signal"], dtype=np.float32)
             self.labels = np.asarray(archive["label"], dtype=np.int64)
+            preprocessing_state = None
+            if preprocessing_profile is not None:
+                preprocessing_state = validate_npz_profile(archive, preprocessing_profile)
+            elif not allow_unprofiled_fixture:
+                raise ValueError(
+                    "An explicit EMG preprocessing_profile is required outside synthetic fixtures"
+                )
+        self.preprocessing_profile = preprocessing_profile
+        if preprocessed_signals is not None:
+            supplied = np.asarray(preprocessed_signals, dtype=np.float32)
+            if supplied.shape != self.signals.shape:
+                raise ValueError("preprocessed_signals shape does not match windows.npz")
+            self.signals = supplied
+        elif preprocessing_profile is not None and preprocessing_state is not None:
+            if preprocessing_state.preprocessed:
+                pass  # already filtered continuously before session windowing
+            elif not allow_window_reset_fallback:
+                raise ValueError(
+                    "Raw EMG window-reset filtering is fixture/calibration fallback only"
+                )
+            else:
+                self.signals = preprocess_emg_windows(self.signals, preprocessing_profile)
         self.rows = load_manifest(manifest_path)
         self.indices = np.asarray([int(row["index"]) for row in self.rows], dtype=np.int64)
         if np.any(self.indices < 0) or np.any(self.indices >= self.signals.shape[0]):
@@ -87,6 +119,12 @@ class EMGWindowDataset(Dataset):
         self.channel_rotation = int(channel_rotation)
         if self.channel_rotation < 0:
             raise ValueError("channel_rotation cannot be negative")
+        if self.mean is not None:
+            expected = (self.signals.shape[1],)
+            if self.mean.shape != expected or self.std is None or self.std.shape != expected:
+                raise ValueError("EMG normalization shape does not match signal channels")
+            if np.any(self.std <= 0):
+                raise ValueError("EMG normalization std must be positive")
 
     def __len__(self) -> int:
         return int(self.indices.size)

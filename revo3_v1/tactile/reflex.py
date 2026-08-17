@@ -19,9 +19,12 @@ from .contracts import FINGER_COUNT, TactileFrame
 
 class ReflexPhase(str, Enum):
     PRECONTACT = "precontact"
+    PRECONTACT_RUN = "precontact"
     CONTACT_BUILD = "contact_build"
     HOLD = "hold"
+    STABLE_HOLD = "hold"
     RELEASE = "release"
+    CONTROLLED_RELEASE = "release"
 
 
 def demo_closing_synergy() -> np.ndarray:
@@ -69,6 +72,11 @@ class ReflexConfig:
     max_abs_cumulative_rad: float = 0.035
     slip_enabled: bool = False
     slip_threshold: float = 0.5
+    load_relief_enabled: bool = False
+    max_tactile_age_ns: int = 150_000_000
+    synergy_artifact_sha256: str = ""
+    hardware_mode: bool = False
+    update_hz: int = 12
 
     def __post_init__(self) -> None:
         synergy = assert_joint_vector(self.closing_synergy, name="closing_synergy")
@@ -98,6 +106,17 @@ class ReflexConfig:
         ):
             if float(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} must be positive.")
+        if self.max_tactile_age_ns <= 0:
+            raise ValueError("max_tactile_age_ns must be positive.")
+        if int(self.update_hz) != 12:
+            raise ValueError("V1 CAIR update_hz is frozen at 12 Hz.")
+        if self.hardware_mode and self.enabled:
+            if len(self.synergy_artifact_sha256) != 64 or any(
+                ch not in "0123456789abcdef" for ch in self.synergy_artifact_sha256
+            ):
+                raise ValueError(
+                    "hardware CAIR requires a verified versioned synergy artifact SHA-256."
+                )
         object.__setattr__(self, "closing_synergy", synergy)
         object.__setattr__(self, "baseline_median", baseline)
         object.__setattr__(self, "baseline_mad", mad)
@@ -107,7 +126,27 @@ class ReflexConfig:
 
     @classmethod
     def demo(cls) -> "ReflexConfig":
-        return cls(enabled=True, closing_synergy=demo_closing_synergy())
+        return cls(
+            enabled=True,
+            closing_synergy=demo_closing_synergy(),
+            hardware_mode=False,
+        )
+
+    @classmethod
+    def from_artifact(cls, artifact, **kwargs) -> "ReflexConfig":
+        """Construct the only hardware-eligible enabled configuration."""
+
+        from .synergy import ClosingSynergyArtifact
+
+        if not isinstance(artifact, ClosingSynergyArtifact):
+            raise TypeError("artifact must be a ClosingSynergyArtifact")
+        return cls(
+            enabled=True,
+            closing_synergy=artifact.vector,
+            synergy_artifact_sha256=artifact.artifact_sha256,
+            hardware_mode=True,
+            **kwargs,
+        )
 
 
 @dataclass(frozen=True)
@@ -132,6 +171,7 @@ class TactileReflexPlugin:
         self._last_timestamp_ns: int | None = None
         self._last_overload = False
         self._last_hard_overload = False
+        self._last_integration_timestamp_ns: int | None = None
 
     @property
     def residual_q_rad(self) -> np.ndarray:
@@ -143,6 +183,7 @@ class TactileReflexPlugin:
         self._last_timestamp_ns = None
         self._last_overload = False
         self._last_hard_overload = False
+        self._last_integration_timestamp_ns = None
 
     def update(
         self,
@@ -150,6 +191,7 @@ class TactileReflexPlugin:
         *,
         phase: ReflexPhase,
         slip_score: float = 0.0,
+        now_ns: int | None = None,
     ) -> ReflexResult:
         if self._last_timestamp_ns is not None and frame.timestamp_ns < self._last_timestamp_ns:
             raise ValueError("out-of-order tactile frame cannot drive reflex.")
@@ -160,12 +202,38 @@ class TactileReflexPlugin:
             self._contact.fill(False)
             self._last_overload = False
             self._last_hard_overload = False
+            self._last_integration_timestamp_ns = None
             return self._result(
                 delta=np.zeros(JOINT_COUNT, dtype=np.float32),
                 overload=False,
                 hard_overload=False,
                 updated=True,
                 reason="disabled_or_phase_zero",
+                timestamp_ns=frame.timestamp_ns,
+            )
+
+        if now_ns is None:
+            # An enabled contact reflex must prove freshness at the call site.
+            # Freeze the last residual rather than dropping it (which could
+            # open a holding hand) or integrating an old sensor sample.
+            return self._result(
+                delta=np.zeros(JOINT_COUNT, dtype=np.float32),
+                overload=self._last_overload,
+                hard_overload=self._last_hard_overload,
+                updated=False,
+                reason="touch_freshness_unverified_cair_disabled",
+                timestamp_ns=frame.timestamp_ns,
+            )
+        tactile_age_ns = int(now_ns) - int(frame.timestamp_ns)
+        if tactile_age_ns < 0:
+            raise ValueError("future tactile frame cannot drive reflex.")
+        if tactile_age_ns > self.config.max_tactile_age_ns:
+            return self._result(
+                delta=np.zeros(JOINT_COUNT, dtype=np.float32),
+                overload=self._last_overload,
+                hard_overload=self._last_hard_overload,
+                updated=False,
+                reason="stale_touch_cair_disabled",
                 timestamp_ns=frame.timestamp_ns,
             )
 
@@ -194,6 +262,26 @@ class TactileReflexPlugin:
         self._last_overload = overload
         self._last_hard_overload = hard_overload
 
+        min_interval_ns = int(round(1_000_000_000 / self.config.update_hz))
+        rate_limited = (
+            self._last_integration_timestamp_ns is not None
+            and frame.timestamp_ns - self._last_integration_timestamp_ns < min_interval_ns
+        )
+        if rate_limited:
+            return self._result(
+                delta=np.zeros(JOINT_COUNT, dtype=np.float32),
+                overload=overload,
+                hard_overload=hard_overload,
+                updated=False,
+                reason=(
+                    "hard_overload_rate_limited_reported"
+                    if hard_overload
+                    else "cair_12hz_rate_limited"
+                ),
+                timestamp_ns=frame.timestamp_ns,
+            )
+        self._last_integration_timestamp_ns = frame.timestamp_ns
+
         scalar_step = 0.0
         reason = "no_contact_or_deadband"
         if hard_overload or overload:
@@ -205,9 +293,11 @@ class TactileReflexPlugin:
             if mean_error > cfg.deadband:
                 scalar_step = cfg.tighten_step_rad
                 reason = "hold_tighten"
-            elif mean_error < -cfg.deadband:
+            elif mean_error < -cfg.deadband and cfg.load_relief_enabled:
                 scalar_step = -cfg.loosen_step_rad
-                reason = "hold_loosen"
+                reason = "load_relief"
+            elif mean_error < -cfg.deadband:
+                reason = "load_relief_disabled"
             if cfg.slip_enabled and float(slip_score) >= cfg.slip_threshold:
                 scalar_step = max(scalar_step, cfg.tighten_step_rad)
                 reason = "slip_tighten"

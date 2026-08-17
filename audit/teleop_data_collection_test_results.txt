@@ -1,45 +1,42 @@
-Revo3 teleoperation and hardware collection verification
+Revo3 teleoperation and hardware-collection component verification
 Date: 2026-08-18 Asia/Shanghai
-Revision under test: f68bddc05747e4e857281204952b6e38659c74e7
+Revision under test: agent/revo3-v1-demo working tree before final commit
 
-Full command:
-  $env:PYTHONPATH='teleop_data_collection/src;.'
+Teleop command:
+  py -3.10 -m pytest -q teleop_data_collection/tests
+
+Observed result:
+  137 passed, 1 warning in 41.84s
+
+Full repository command:
   py -3.10 -m pytest -q
 
-Root-agent observed result:
-  228 passed, 1 warning in 34.86s
+Observed result:
+  425 passed, 2 warnings in 110.60s
 
-Independent final-audit result:
-  The final audit reported the same 228-passed full-suite result with the
-  identical warning. Its final camera/runner/collection regression set passed
-  32 tests; an earlier broader hardware/recording set passed 60 tests before
-  the final camera cleanup-retry case was added.
-
-Additional checks reported by the final hardware audit:
-  py -3.10 -m compileall -q teleop_data_collection/src revo3_v1
-  parse all 16 checked JSON configurations and source locks
-  run the checked-in hardware collection template in default audit-only mode
+Additional checks in this audit round:
+  py -3.10 -m compileall -q revo3_v1 teleop_data_collection/src scripts tactile_vqvae
+  parse checked JSON and TOML configurations
+  validate both reproduction matrices
+  validate both synthetic dataset-readiness manifests
   git diff --check
-  run a targeted repository secret scan
-
-All additional checks passed. The default audit connected no device, imported
-no assembly plugin, and wrote no actuator. The targeted scan reported no
-credential match; credential values are not stored in this artifact.
+  targeted repository credential/endpoint scan
 
 Verified scope:
-  local contracts; pinned-source adapters; injected SDK/device boundaries;
-  synthetic native-rate recording; capture<=anchor and
-  receive<=controller-decision causality; causal fallback and rejection;
-  exporter revalidation; accepted exact-sent controller-label serialization;
-  fail-closed readiness; startup ownership; bounded control/shutdown/close;
-  quarantine and close-before-commit failure paths.
+  local contracts; pinned-source and injected SDK boundaries; synthetic
+  native-rate recording; capture<=anchor and receive<=controller-decision
+  causality; exporter revalidation; exact-sent nominal controller-label
+  serialization; five-class reviewed EMG export; Profile A Force6D+DIFF and
+  Profile B DIFF-only schemas; fail-closed readiness; startup ownership;
+  bounded control/shutdown/close; quarantine; close-before-commit.
 
-Warning:
-  The one warning is the existing torch/optree FutureWarning. It disables a
-  C++ pytree optimization and does not expand or invalidate the verified scope.
+Warnings for the full repository run:
+  The warnings are the existing torch/optree FutureWarning and TensorFlow's
+  distutils deprecation warning. They do not expand or invalidate the verified
+  scope. The standalone teleop result above remains 137 passed, 1 warning.
 
 Explicitly excluded:
   physical robot motion; physical SDK/device connectivity; calibrated camera,
   U21VT/VisionTouch, Revo, glove, EMG or Tianji timing and units; retarget
   quality; biological EMG accuracy; real-data training readiness; task success;
-  paper metrics; hardware safety certification; and clinical outcomes.
+  paper metrics; hardware safety certification; clinical outcomes.

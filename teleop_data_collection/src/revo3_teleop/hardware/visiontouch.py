@@ -42,6 +42,10 @@ VISIONTOUCH_FINGER_ORDER = ("thumb", "index", "middle", "ring", "pinky")
 VISIONTOUCH_AXIS_ORDER = ("Fx", "Fy", "Fz", "Mx", "My", "Mz")
 VISIONTOUCH_AXIS_UNITS = ("N", "N", "N", "Nm", "Nm", "Nm")
 VISIONTOUCH_MAX_RAW_RANK = 8
+VISIONTOUCH_PROFILE_FORCE6D = "force6d"
+VISIONTOUCH_PROFILE_FORCE6D_DIFF = "force6d_diff"
+VISIONTOUCH_PROFILE_DIFF_ONLY = "diff_only"
+VISIONTOUCH_DIFF_SHAPE = (240, 240)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -91,6 +95,9 @@ class VisionTouchForce6DConfig:
     expected_sdk_version: str = VISIONTOUCH_PINNED_VERSION
     allow_hardware_probe: bool = False
     allow_hardware_stream: bool = False
+    capture_profile: str = VISIONTOUCH_PROFILE_FORCE6D
+    expected_diff_shape: tuple[int, int] = VISIONTOUCH_DIFF_SHAPE
+    max_inter_finger_skew_ns: int | None = None
 
     def __post_init__(self) -> None:
         model_dir = Path(self.force_model_dir).expanduser()
@@ -104,21 +111,49 @@ class VisionTouchForce6DConfig:
             for key, value in dict(self.expected_model_sha256).items()
         }
         required = set(VISIONTOUCH_FINGER_ORDER)
+        profile = str(self.capture_profile).strip().lower()
+        if profile not in {
+            VISIONTOUCH_PROFILE_FORCE6D,
+            VISIONTOUCH_PROFILE_FORCE6D_DIFF,
+            VISIONTOUCH_PROFILE_DIFF_ONLY,
+        }:
+            raise ValueError("unsupported VisionTouch capture_profile")
         if set(finger_serials) != required:
             raise ValueError(
                 "finger_serials must contain exactly thumb/index/middle/ring/pinky"
             )
         if len(set(finger_serials.values())) != len(VISIONTOUCH_FINGER_ORDER):
             raise ValueError("VisionTouch finger serial numbers must be unique")
-        if set(expected_hashes) != required:
-            raise ValueError("expected_model_sha256 keys must exactly match the five fingers")
-        for finger, expected in expected_hashes.items():
-            if _SHA256_RE.fullmatch(expected) is None:
-                raise ValueError(f"expected model SHA-256 for {finger} must be 64 lowercase hex")
+        needs_force = profile in {
+            VISIONTOUCH_PROFILE_FORCE6D,
+            VISIONTOUCH_PROFILE_FORCE6D_DIFF,
+        }
+        if needs_force:
+            if set(expected_hashes) != required:
+                raise ValueError("expected_model_sha256 keys must exactly match the five fingers")
+            for finger, expected in expected_hashes.items():
+                if _SHA256_RE.fullmatch(expected) is None:
+                    raise ValueError(
+                        f"expected model SHA-256 for {finger} must be 64 lowercase hex"
+                    )
+        elif expected_hashes:
+            raise ValueError("diff_only must not claim unused force-model hashes")
+        diff_shape = tuple(int(value) for value in self.expected_diff_shape)
+        if len(diff_shape) != 2 or any(value <= 0 for value in diff_shape):
+            raise ValueError("expected_diff_shape must be two positive integers")
         if not str(self.expected_sdk_version).strip():
             raise ValueError("expected_sdk_version must be non-empty")
+        if self.allow_hardware_stream and (
+            self.max_inter_finger_skew_ns is None
+            or int(self.max_inter_finger_skew_ns) <= 0
+        ):
+            raise ValueError(
+                "hardware stream requires an operator-approved max_inter_finger_skew_ns"
+            )
         object.__setattr__(self, "finger_serials", MappingProxyType(finger_serials))
         object.__setattr__(self, "expected_model_sha256", MappingProxyType(expected_hashes))
+        object.__setattr__(self, "capture_profile", profile)
+        object.__setattr__(self, "expected_diff_shape", diff_shape)
 
 
 @dataclass(frozen=True)
@@ -142,6 +177,8 @@ class VisionTouchProbeReport:
     device_timestamp_available: bool
     force_model_mode: str
     real_hardware_function_verified: bool
+    capture_profile: str = VISIONTOUCH_PROFILE_FORCE6D
+    diff_output_shape: tuple[int, int, int] | None = None
 
     def fingerprint(self) -> str:
         return _stable_hash(asdict(self))
@@ -178,6 +215,7 @@ class VisionTouchForce6DSource:
         self._report: VisionTouchProbeReport | None = None
         self._sensors: dict[str, Any] = {}
         self._force_dtype: object | None = None
+        self._diff_dtype: object | None = None
         self._sequence = 0
 
     def _module(self) -> Any:
@@ -189,6 +227,8 @@ class VisionTouchForce6DSource:
         return self._sdk
 
     def _model_path(self, serial: str) -> Path:
+        if self.config.capture_profile == VISIONTOUCH_PROFILE_DIFF_ONLY:
+            raise RuntimeError("diff_only does not use a force model")
         root = self.config.force_model_dir.resolve(strict=True)
         candidate = (root / serial / f"{serial}.onnx.enc").resolve(strict=True)
         if not candidate.is_relative_to(root):
@@ -198,6 +238,8 @@ class VisionTouchForce6DSource:
         return candidate
 
     def _verify_models(self) -> dict[str, tuple[Path, str]]:
+        if self.config.capture_profile == VISIONTOUCH_PROFILE_DIFF_ONLY:
+            return {}
         verified: dict[str, tuple[Path, str]] = {}
         for finger in VISIONTOUCH_FINGER_ORDER:
             serial = self.config.finger_serials[finger]
@@ -270,6 +312,7 @@ class VisionTouchForce6DSource:
             ),
             force_model_sha256=tuple(
                 (finger, verified[finger][1]) for finger in VISIONTOUCH_FINGER_ORDER
+                if finger in verified
             ),
             force_model_relative_paths=tuple(
                 (
@@ -279,6 +322,7 @@ class VisionTouchForce6DSource:
                     .as_posix(),
                 )
                 for finger in VISIONTOUCH_FINGER_ORDER
+                if finger in verified
             ),
             output_shape=(5, 6),
             finger_order=VISIONTOUCH_FINGER_ORDER,
@@ -286,8 +330,19 @@ class VisionTouchForce6DSource:
             axis_units=VISIONTOUCH_AXIS_UNITS,
             capture_clock_provenance="host_sdk_read_completion_monotonic",
             device_timestamp_available=False,
-            force_model_mode="required_per_serial_sha256_verified",
+            force_model_mode=(
+                "not_used_diff_only"
+                if self.config.capture_profile == VISIONTOUCH_PROFILE_DIFF_ONLY
+                else "required_per_serial_sha256_verified"
+            ),
             real_hardware_function_verified=False,
+            capture_profile=self.config.capture_profile,
+            diff_output_shape=(
+                (5, *self.config.expected_diff_shape)
+                if self.config.capture_profile
+                in {VISIONTOUCH_PROFILE_FORCE6D_DIFF, VISIONTOUCH_PROFILE_DIFF_ONLY}
+                else None
+            ),
         )
         self._report = report
         return report
@@ -300,7 +355,7 @@ class VisionTouchForce6DSource:
 
     @property
     def episode_metadata(self) -> dict[str, object]:
-        return {
+        metadata = {
             "visiontouch_force6d": self.report.to_json(),
             "sample_payload": {
                 "features": {
@@ -319,7 +374,23 @@ class VisionTouchForce6DSource:
                 "require non-empty raw (...,6); preserve (6,); otherwise mean over all "
                 "leading axes; never truncate or zero-pad components"
             ),
+            "max_inter_finger_skew_ns": self.config.max_inter_finger_skew_ns,
         }
+        if self.config.capture_profile in {
+            VISIONTOUCH_PROFILE_FORCE6D_DIFF,
+            VISIONTOUCH_PROFILE_DIFF_ONLY,
+        }:
+            metadata["sample_payload"]["tactile_diff"] = {
+                "shape": [5, *self.config.expected_diff_shape],
+                "dtype": "uint8",
+                "finger_order": list(VISIONTOUCH_FINGER_ORDER),
+                "source": "VTSDataType.DIFF_IMG",
+            }
+            metadata["sample_payload"]["tactile_diff_timestamp_ns"] = {
+                "shape": [5],
+                "clock": "host_sdk_read_completion_monotonic_per_finger",
+            }
+        return metadata
 
     def start(self) -> None:
         if self._sensors:
@@ -333,9 +404,20 @@ class VisionTouchForce6DSource:
         if discovered != report.discovered_sns:
             raise RuntimeError("VisionTouch discovery changed since capability probe")
         verified = self._verify_models()
-        dtype = getattr(sdk.VTSDataType, "FORCE6D_VECTOR", None)
-        if dtype is None:
+        needs_force = self.config.capture_profile in {
+            VISIONTOUCH_PROFILE_FORCE6D,
+            VISIONTOUCH_PROFILE_FORCE6D_DIFF,
+        }
+        needs_diff = self.config.capture_profile in {
+            VISIONTOUCH_PROFILE_FORCE6D_DIFF,
+            VISIONTOUCH_PROFILE_DIFF_ONLY,
+        }
+        dtype = getattr(sdk.VTSDataType, "FORCE6D_VECTOR", None) if needs_force else None
+        diff_dtype = getattr(sdk.VTSDataType, "DIFF_IMG", None) if needs_diff else None
+        if needs_force and dtype is None:
             raise RuntimeError("pyvitaisdk exposes no FORCE6D_VECTOR data type")
+        if needs_diff and diff_dtype is None:
+            raise RuntimeError("pyvitaisdk exposes no DIFF_IMG data type")
         opened: dict[str, Any] = {}
         try:
             for finger in VISIONTOUCH_FINGER_ORDER:
@@ -343,15 +425,19 @@ class VisionTouchForce6DSource:
                 device_config = finder.get_device_by_sn(serial)
                 if device_config is None:
                     raise RuntimeError(f"VisionTouch config disappeared for {finger}/{serial}")
-                sensor = sdk.VTSensor(
-                    config=device_config,
-                    force_model_path=str(verified[finger][0]),
-                )
-                for method in ("calibrate", "collect_sensor_data", "release"):
+                sensor_kwargs = {"config": device_config}
+                if needs_force:
+                    sensor_kwargs["force_model_path"] = str(verified[finger][0])
+                sensor = sdk.VTSensor(**sensor_kwargs)
+                required_methods = ["collect_sensor_data", "release"]
+                if needs_force:
+                    required_methods.append("calibrate")
+                for method in required_methods:
                     if not callable(getattr(sensor, method, None)):
                         raise RuntimeError(f"VisionTouch sensor API mismatch: missing {method}")
                 opened[finger] = sensor
-                sensor.calibrate()
+                if needs_force:
+                    sensor.calibrate()
         except Exception as start_failure:
             unreleased: dict[str, Any] = {}
             release_failures: list[BaseException] = []
@@ -367,6 +453,7 @@ class VisionTouchForce6DSource:
                 # partially opened USB sensor invisible to later cleanup.
                 self._sensors = unreleased
                 self._force_dtype = None
+                self._diff_dtype = None
                 raise RuntimeError(
                     "VisionTouch startup failed and one or more sensors could not "
                     "be released; process/device intervention is required"
@@ -374,6 +461,7 @@ class VisionTouchForce6DSource:
             raise
         self._sensors = opened
         self._force_dtype = dtype
+        self._diff_dtype = diff_dtype
         self._sequence = 0
 
     def poll_force6d(self) -> NativeSample:
@@ -382,9 +470,11 @@ class VisionTouchForce6DSource:
         read_start_ns = int(self._clock())
         rows: list[np.ndarray] = []
         raw_shapes: list[tuple[int, ...]] = []
+        per_finger_timestamps: list[int] = []
         for finger in VISIONTOUCH_FINGER_ORDER:
             sensor = self._sensors[finger]
             result = sensor.collect_sensor_data(self._force_dtype)
+            per_finger_timestamps.append(max(int(self._clock()), read_start_ns + 1))
             if not isinstance(result, Mapping) or self._force_dtype not in result:
                 raise RuntimeError(f"VisionTouch FORCE6D_VECTOR missing for {finger}")
             raw = np.asarray(result[self._force_dtype])
@@ -409,7 +499,10 @@ class VisionTouchForce6DSource:
         features = np.stack(rows, axis=0)
         if features.shape != (5, 6) or not np.isfinite(features).all():
             raise RuntimeError("VisionTouch aggregate must be finite [5,6]")
-        read_end_ns = max(int(self._clock()), read_start_ns + 1)
+        read_end_ns = max(per_finger_timestamps)
+        skew_ns = read_end_ns - min(per_finger_timestamps)
+        if skew_ns > int(self.config.max_inter_finger_skew_ns):
+            raise RuntimeError("VisionTouch Force6D inter-finger read skew exceeds budget")
         sequence = self._sequence
         self._sequence += 1
         encoded_shapes = np.full(
@@ -433,12 +526,109 @@ class VisionTouchForce6DSource:
             {
                 "features": features,
                 "finger_valid": np.ones(5, dtype=np.uint8),
+                "force6d_finger_timestamp_ns": np.asarray(
+                    per_finger_timestamps, dtype=np.int64
+                ),
                 "raw_return_shape": encoded_shapes,
                 "host_read_start_timestamp_ns": np.asarray([read_start_ns], dtype=np.int64),
                 "host_read_end_timestamp_ns": np.asarray([read_end_ns], dtype=np.int64),
                 "device_timestamp_available": np.asarray([0], dtype=np.uint8),
                 "clock_is_host_reconstruction": np.asarray([1], dtype=np.uint8),
             },
+        )
+
+    def poll(self) -> NativeSample:
+        """Read the configured profile once per finger without fabricating modalities."""
+
+        if self.config.capture_profile == VISIONTOUCH_PROFILE_FORCE6D:
+            return self.poll_force6d()
+        if tuple(self._sensors) != VISIONTOUCH_FINGER_ORDER or self._diff_dtype is None:
+            raise RuntimeError("VisionTouch DIFF source is not streaming with all five fingers")
+        read_start_ns = int(self._clock())
+        rows: list[np.ndarray] = []
+        diffs: list[np.ndarray] = []
+        per_finger_timestamps: list[int] = []
+        for finger in VISIONTOUCH_FINGER_ORDER:
+            sensor = self._sensors[finger]
+            requested = (
+                (self._force_dtype, self._diff_dtype)
+                if self._force_dtype is not None
+                else (self._diff_dtype,)
+            )
+            result = sensor.collect_sensor_data(*requested)
+            per_finger_timestamps.append(max(int(self._clock()), read_start_ns + 1))
+            if not isinstance(result, Mapping) or self._diff_dtype not in result:
+                raise RuntimeError(f"VisionTouch DIFF_IMG missing for {finger}")
+            raw_diff = np.asarray(result[self._diff_dtype])
+            if raw_diff.ndim == 3 and raw_diff.shape[-1] == 1:
+                raw_diff = raw_diff[..., 0]
+            if raw_diff.shape != self.config.expected_diff_shape:
+                raise RuntimeError(
+                    f"VisionTouch DIFF_IMG for {finger} must be "
+                    f"{self.config.expected_diff_shape}, observed {raw_diff.shape}"
+                )
+            if raw_diff.dtype != np.uint8:
+                raise RuntimeError(
+                    f"VisionTouch DIFF_IMG for {finger} must be uint8, "
+                    f"observed {raw_diff.dtype}"
+                )
+            diffs.append(raw_diff.copy())
+            if self._force_dtype is not None:
+                if self._force_dtype not in result:
+                    raise RuntimeError(f"VisionTouch FORCE6D_VECTOR missing for {finger}")
+                raw_force = np.asarray(result[self._force_dtype])
+                if raw_force.ndim < 1 or raw_force.shape[-1] != 6 or raw_force.size == 0:
+                    raise RuntimeError(
+                        f"VisionTouch FORCE6D_VECTOR for {finger} must be non-empty (...,6)"
+                    )
+                numeric = raw_force.astype(np.float64, copy=False)
+                if not np.isfinite(numeric).all():
+                    raise RuntimeError(
+                        f"VisionTouch FORCE6D_VECTOR contains non-finite data for {finger}"
+                    )
+                rows.append(
+                    np.asarray(
+                        numeric if numeric.ndim == 1 else numeric.reshape(-1, 6).mean(axis=0),
+                        dtype=np.float32,
+                    )
+                )
+        timestamp_ns = max(per_finger_timestamps)
+        skew_ns = timestamp_ns - min(per_finger_timestamps)
+        if skew_ns > int(self.config.max_inter_finger_skew_ns):
+            raise RuntimeError("VisionTouch inter-finger read skew exceeds budget")
+        payload: dict[str, np.ndarray] = {
+            "tactile_diff": np.stack(diffs).astype(np.uint8, copy=False),
+            "tactile_diff_timestamp_ns": np.asarray(per_finger_timestamps, dtype=np.int64),
+            "finger_valid": np.ones(5, dtype=np.uint8),
+            "host_read_start_timestamp_ns": np.asarray([read_start_ns], dtype=np.int64),
+            "host_read_end_timestamp_ns": np.asarray([timestamp_ns], dtype=np.int64),
+            "device_timestamp_available": np.asarray([0], dtype=np.uint8),
+            "clock_is_host_reconstruction": np.asarray([1], dtype=np.uint8),
+        }
+        if rows:
+            features = np.stack(rows).astype(np.float32, copy=False)
+            if features.shape != (5, 6) or not np.isfinite(features).all():
+                raise RuntimeError("VisionTouch aggregate must be finite [5,6]")
+            payload["features"] = features
+            payload["force6d_finger_timestamp_ns"] = np.asarray(
+                per_finger_timestamps, dtype=np.int64
+            )
+        sequence = self._sequence
+        self._sequence += 1
+        return NativeSample(
+            SampleHeader(
+                source_id=(
+                    f"revo3_u21vt_visiontouch_{self.config.capture_profile}_"
+                    f"{self.report.fingerprint()[:12]}"
+                ),
+                sequence=sequence,
+                capture_timestamp_ns=timestamp_ns,
+                receive_timestamp_ns=timestamp_ns,
+                clock_domain=VISIONTOUCH_CLOCK_DOMAIN,
+                device_timestamp_ns=None,
+                valid=True,
+            ),
+            payload,
         )
 
     def stop(self) -> None:
@@ -454,6 +644,7 @@ class VisionTouchForce6DSource:
         self._sensors = unreleased
         if not unreleased:
             self._force_dtype = None
+            self._diff_dtype = None
         if failures:
             raise RuntimeError(
                 "one or more VisionTouch sensors failed to release; retained handles "
@@ -473,6 +664,10 @@ __all__ = [
     "VISIONTOUCH_FINGER_ORDER",
     "VISIONTOUCH_IMPORT",
     "VISIONTOUCH_MAX_RAW_RANK",
+    "VISIONTOUCH_DIFF_SHAPE",
+    "VISIONTOUCH_PROFILE_DIFF_ONLY",
+    "VISIONTOUCH_PROFILE_FORCE6D",
+    "VISIONTOUCH_PROFILE_FORCE6D_DIFF",
     "VISIONTOUCH_PINNED_VERSION",
     "VisionTouchForce6DConfig",
     "VisionTouchForce6DSource",

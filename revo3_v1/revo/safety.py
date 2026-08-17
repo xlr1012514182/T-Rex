@@ -32,26 +32,85 @@ class SafetyEnvelope:
     max_state_age_ns: int = 50_000_000
     max_abs_current_a: np.ndarray | float = 1000.0
     fault_status_mask: int = REVO3_FAULT_STATUS_MASK
+    max_abs_velocity_rad_s: np.ndarray | float | None = None
+    max_abs_acceleration_rad_s2: np.ndarray | float | None = None
+    max_temperature_c: np.ndarray | float | None = None
+    require_temperature_telemetry: bool = False
+    hardware_profile_id: str = ""
+    simulation_only: bool = False
+    command_period_ns: int = 10_000_000
 
     def __post_init__(self) -> None:
         q_min = assert_joint_vector(self.q_min_rad, name="q_min_rad")
         q_max = assert_joint_vector(self.q_max_rad, name="q_max_rad")
         max_step = assert_joint_vector(self.max_step_rad, name="max_step_rad")
         max_current = _array21(self.max_abs_current_a, name="max_abs_current_a")
+        max_velocity = (
+            None
+            if self.max_abs_velocity_rad_s is None
+            else _array21(self.max_abs_velocity_rad_s, name="max_abs_velocity_rad_s")
+        )
+        max_acceleration = (
+            None
+            if self.max_abs_acceleration_rad_s2 is None
+            else _array21(
+                self.max_abs_acceleration_rad_s2,
+                name="max_abs_acceleration_rad_s2",
+            )
+        )
+        max_temperature = (
+            None
+            if self.max_temperature_c is None
+            else _array21(self.max_temperature_c, name="max_temperature_c")
+        )
         if np.any(q_min >= q_max):
             raise ValueError("Every q_min_rad must be strictly below q_max_rad.")
         if np.any(max_step <= 0):
             raise ValueError("Every max_step_rad must be positive.")
         if np.any(max_current <= 0):
             raise ValueError("Every max_abs_current_a must be positive.")
+        if max_velocity is not None and (
+            np.any(max_velocity <= 0) or not np.isfinite(max_velocity).all()
+        ):
+            raise ValueError("Every configured max_abs_velocity_rad_s must be finite and positive.")
+        if max_acceleration is not None and (
+            np.any(max_acceleration <= 0) or not np.isfinite(max_acceleration).all()
+        ):
+            raise ValueError(
+                "Every configured max_abs_acceleration_rad_s2 must be finite and positive."
+            )
+        if max_temperature is not None and (
+            np.any(max_temperature <= 0) or not np.isfinite(max_temperature).all()
+        ):
+            raise ValueError("Every configured max_temperature_c must be finite and positive.")
         if self.max_state_age_ns <= 0:
             raise ValueError("max_state_age_ns must be positive.")
+        if self.command_period_ns <= 0:
+            raise ValueError("command_period_ns must be positive.")
         if not 0 <= int(self.fault_status_mask) <= 0xFFFF:
             raise ValueError("fault_status_mask must be a u16 bitmask.")
         object.__setattr__(self, "q_min_rad", q_min)
         object.__setattr__(self, "q_max_rad", q_max)
         object.__setattr__(self, "max_step_rad", max_step)
         object.__setattr__(self, "max_abs_current_a", max_current)
+        object.__setattr__(self, "max_abs_velocity_rad_s", max_velocity)
+        object.__setattr__(self, "max_abs_acceleration_rad_s2", max_acceleration)
+        object.__setattr__(self, "max_temperature_c", max_temperature)
+
+    @property
+    def hardware_ready(self) -> bool:
+        """Whether limits are explicitly calibrated for a real writer."""
+
+        return bool(
+            not self.simulation_only
+            and self.hardware_profile_id.strip()
+            and self.max_abs_velocity_rad_s is not None
+            and self.max_abs_acceleration_rad_s2 is not None
+            and self.max_temperature_c is not None
+            and self.require_temperature_telemetry
+            and np.isfinite(self.max_abs_current_a).all()
+            and self.command_period_ns == 10_000_000
+        )
 
     @classmethod
     def demo(cls, *, max_step_rad: float = 0.05) -> "SafetyEnvelope":
@@ -63,6 +122,12 @@ class SafetyEnvelope:
             max_step_rad=np.full(JOINT_COUNT, max_step_rad, dtype=np.float32),
             max_state_age_ns=1_000_000_000,
             max_abs_current_a=np.full(JOINT_COUNT, 1000.0, dtype=np.float32),
+            max_abs_velocity_rad_s=np.full(JOINT_COUNT, 1000.0, dtype=np.float32),
+            max_abs_acceleration_rad_s2=np.full(JOINT_COUNT, 1000.0, dtype=np.float32),
+            max_temperature_c=np.full(JOINT_COUNT, 1000.0, dtype=np.float32),
+            require_temperature_telemetry=False,
+            hardware_profile_id="simulation-only-demo",
+            simulation_only=True,
         )
 
 
@@ -73,6 +138,8 @@ class SafetyContext:
     emergency_stop: bool = False
     fault_latched: bool = False
     command_lease_valid: bool = True
+    policy_aborted: bool = False
+    holding_object: bool = False
     reason: str = ""
 
 
@@ -82,6 +149,10 @@ class SafetyResult:
     vetoed: bool
     clipped: bool
     reason: str
+    hard_fault_latched: bool = False
+    clear_policy_cache: bool = False
+    soft_stop_requested: bool = False
+    soft_stop_succeeded: bool = False
 
 
 class SafetySupervisor:
@@ -89,6 +160,22 @@ class SafetySupervisor:
 
     def __init__(self, envelope: SafetyEnvelope) -> None:
         self.envelope = envelope
+        self._previous_velocity_rad_s: np.ndarray | None = None
+        self._previous_velocity_timestamp_ns: int | None = None
+        self._previous_velocity_sequence: int | None = None
+        self._previous_command_q_rad: np.ndarray | None = None
+        self._previous_command_velocity_rad_s: np.ndarray | None = None
+        self._previous_command_timestamp_ns: int | None = None
+
+    def reset_telemetry_history(self) -> None:
+        """Reset acceleration estimation only at an explicit lifecycle boundary."""
+
+        self._previous_velocity_rad_s = None
+        self._previous_velocity_timestamp_ns = None
+        self._previous_velocity_sequence = None
+        self._previous_command_q_rad = None
+        self._previous_command_velocity_rad_s = None
+        self._previous_command_timestamp_ns = None
 
     def authorize(
         self,
@@ -121,8 +208,53 @@ class SafetySupervisor:
             hard_reasons.append("tactile_overload")
         if not context.command_lease_valid:
             hard_reasons.append("invalid_command_lease")
+        if context.policy_aborted:
+            hard_reasons.append("policy_aborted_hold" if context.holding_object else "policy_aborted")
+        if self.envelope.max_abs_velocity_rad_s is not None and np.any(
+            np.abs(state.dq_rad_s) > self.envelope.max_abs_velocity_rad_s
+        ):
+            hard_reasons.append("over_velocity")
+        # Acceleration is derived from two consecutive, strictly newer
+        # telemetry samples.  The first sample establishes history and makes
+        # no acceleration claim; repeated/out-of-order samples are rejected by
+        # the hardware writer freshness gate and are never used here.
+        acceleration = None
+        if (
+            self._previous_velocity_timestamp_ns is not None
+            and state.timestamp_ns > self._previous_velocity_timestamp_ns
+            and (
+                self._previous_velocity_sequence is None
+                or state.sequence > self._previous_velocity_sequence
+            )
+        ):
+            dt_s = (state.timestamp_ns - self._previous_velocity_timestamp_ns) / 1e9
+            acceleration = (
+                state.dq_rad_s - self._previous_velocity_rad_s
+            ) / dt_s
+        if (
+            acceleration is not None
+            and self.envelope.max_abs_acceleration_rad_s2 is not None
+            and np.any(
+                np.abs(acceleration) > self.envelope.max_abs_acceleration_rad_s2
+            )
+        ):
+            hard_reasons.append("over_acceleration")
+        if (
+            self._previous_velocity_timestamp_ns is None
+            or state.timestamp_ns > self._previous_velocity_timestamp_ns
+        ):
+            self._previous_velocity_rad_s = state.dq_rad_s.copy()
+            self._previous_velocity_timestamp_ns = state.timestamp_ns
+            self._previous_velocity_sequence = state.sequence
         if np.any(np.abs(state.current_a) > self.envelope.max_abs_current_a):
             hard_reasons.append("over_current")
+        if self.envelope.require_temperature_telemetry:
+            if state.temperature_c is None:
+                hard_reasons.append("temperature_telemetry_missing")
+            elif self.envelope.max_temperature_c is None:
+                hard_reasons.append("temperature_limit_unconfigured")
+            elif np.any(state.temperature_c > self.envelope.max_temperature_c):
+                hard_reasons.append("over_temperature")
         if np.any(np.bitwise_and(state.status, self.envelope.fault_status_mask) != 0):
             hard_reasons.append("motor_fault_or_stall")
 
@@ -140,5 +272,41 @@ class SafetySupervisor:
         step_limited = np.clip(
             step_limited, self.envelope.q_min_rad, self.envelope.q_max_rad
         ).astype(np.float32)
+        if self.envelope.max_abs_velocity_rad_s is not None:
+            if self._previous_command_q_rad is None:
+                command_origin = state.q_rad
+                dt_s = self.envelope.command_period_ns / 1e9
+            else:
+                command_origin = self._previous_command_q_rad
+                elapsed_ns = int(now_ns) - int(self._previous_command_timestamp_ns)
+                if elapsed_ns <= 0:
+                    return SafetyResult(
+                        state.q_rad.copy(), True, False, "command_timestamp_not_fresh"
+                    )
+                dt_s = elapsed_ns / 1e9
+            command_velocity = (step_limited - command_origin) / dt_s
+            if np.any(
+                np.abs(command_velocity) > self.envelope.max_abs_velocity_rad_s
+            ):
+                return SafetyResult(
+                    state.q_rad.copy(), True, False, "command_over_velocity"
+                )
+            if (
+                self._previous_command_velocity_rad_s is not None
+                and self.envelope.max_abs_acceleration_rad_s2 is not None
+            ):
+                command_acceleration = (
+                    command_velocity - self._previous_command_velocity_rad_s
+                ) / dt_s
+                if np.any(
+                    np.abs(command_acceleration)
+                    > self.envelope.max_abs_acceleration_rad_s2
+                ):
+                    return SafetyResult(
+                        state.q_rad.copy(), True, False, "command_over_acceleration"
+                    )
+            self._previous_command_q_rad = step_limited.copy()
+            self._previous_command_velocity_rad_s = command_velocity.copy()
+            self._previous_command_timestamp_ns = int(now_ns)
         clipped = not np.array_equal(step_limited, desired)
         return SafetyResult(step_limited, False, clipped, "clipped" if clipped else "ok")

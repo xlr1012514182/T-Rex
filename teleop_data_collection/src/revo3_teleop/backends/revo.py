@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -27,8 +27,14 @@ class TeleopRevoWriter:
     can never supervise a training anchor.
     """
 
-    def __init__(self, pipeline: RevoCommandPipeline) -> None:
+    def __init__(
+        self,
+        pipeline: RevoCommandPipeline,
+        *,
+        clock_ns: Callable[[], int] = time.monotonic_ns,
+    ) -> None:
         self.pipeline = pipeline
+        self._clock_ns = clock_ns
         self._controller_sequence = 0
         self._last_write_timestamp_ns = -1
 
@@ -47,7 +53,7 @@ class TeleopRevoWriter:
         state: Optional[RevoState] = None,
     ) -> CommandReceipt:
         decision_ns = (
-            time.monotonic_ns()
+            self._clock_ns()
             if decision_timestamp_ns is None
             else int(decision_timestamp_ns)
         )
@@ -87,7 +93,7 @@ class TeleopRevoWriter:
         # monotonically increasing sequence is the collector's write-boundary
         # sequence; it is not presented as motor feedback sequence.
         write_ns = max(
-            time.monotonic_ns(),
+            self._clock_ns(),
             decision_ns,
             self._last_write_timestamp_ns + 1,
         )

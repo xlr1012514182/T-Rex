@@ -39,9 +39,18 @@ class GNIModelTest(unittest.TestCase):
             restored, payload = load_emg_checkpoint(path)
             with torch.no_grad():
                 torch.testing.assert_close(model(inputs), restored(inputs))
-            self.assertEqual(payload["schema_version"], "revo3-emg-checkpoint-v1")
+            self.assertEqual(payload["schema_version"], "revo3-emg-checkpoint-v2")
+
+    def test_mainline_head_has_five_learned_classes(self):
+        from revo3_v1.emg.model import GNIClassifier, GNIModelConfig
+
+        config = GNIModelConfig.smoke(input_channels=4, mainline=True)
+        model = GNIClassifier(config).eval()
+        self.assertEqual(config.resolved_labels(), (
+            "POWER_GRASP", "PRECISION_GRASP", "LATERAL_GRASP", "RELEASE", "REST"
+        ))
+        self.assertEqual(tuple(model(torch.randn(2, 4, 64)).shape), (2, 5))
 
 
 if __name__ == "__main__":
     unittest.main()
-

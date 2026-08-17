@@ -156,7 +156,9 @@ def test_mock_rates_drive_native_stream_counts(tmp_path: Path) -> None:
         "emg": 2,
         "glove": 5,
         "revo_state": 9,
-        "tactile": 7,
+        # 7 in-episode samples plus the real 15-sample native Force6D
+        # pre-roll needed by the fixed 16-frame T-Rex history contract.
+        "tactile": 22,
         "tianji_state": 6,
     }
 

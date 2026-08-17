@@ -16,16 +16,17 @@ from revo3_teleop.recording import (
     EMGLabelInterval,
     EMGSessionSpec,
     EpisodeRecorder,
+    export_emg_dataset,
     export_emg_binary_dataset,
 )
 from revo3_v1.emg.data import verify_split_manifests
 
 
-def make_session(root: Path, *, name: str, epoch_ns: int) -> tuple[Path, int, int]:
+def make_session(root: Path, *, name: str, epoch_ns: int, packets: int = 4) -> tuple[Path, int, int]:
     recorder = EpisodeRecorder(root, episode_id=name, epoch_ns=epoch_ns)
     recorder.start()
     period_ns = 4_000_000
-    for packet in range(4):
+    for packet in range(packets):
         timestamps = epoch_ns + np.arange(
             packet * 20, packet * 20 + 20, dtype=np.int64
         ) * period_ns
@@ -52,7 +53,7 @@ def make_session(root: Path, *, name: str, epoch_ns: int) -> tuple[Path, int, in
             ),
         )
     committed = recorder.commit()
-    return committed, epoch_ns, epoch_ns + 80 * period_ns
+    return committed, epoch_ns, epoch_ns + packets * 20 * period_ns
 
 
 def make_session_with_explicit_packet_gap(
@@ -192,3 +193,31 @@ def test_emg_projection_never_spans_an_explicit_packet_gap(tmp_path: Path) -> No
             tmp_path / "gap_derived",
             EMGExportConfig(window_samples=60, stride_samples=20),
         )
+
+
+def test_mainline_projection_exports_five_class_profile_bound_continuous_filter(tmp_path: Path) -> None:
+    specs = []
+    for index, split in enumerate(("train", "val", "test")):
+        root, start, end = make_session(
+            tmp_path / "master_mainline",
+            name=f"mainline_{index}",
+            epoch_ns=5_000_000_000 + index * 5_000_000_000,
+            packets=30,
+        )
+        specs.append(EMGSessionSpec(
+            root,
+            f"mainline_subject_{index}",
+            f"mainline_session_{index}",
+            split,
+            (EMGLabelInterval(start, end, index, "manual_human_reviewed", True),),
+        ))
+    derived = export_emg_dataset(specs, tmp_path / "mainline_emg")
+    with np.load(derived / "windows.npz", allow_pickle=False) as archive:
+        assert archive["signal"].shape[1:] == (8, 500)
+        assert bool(archive["preprocessed"])
+        assert str(archive["filter_state_provenance"]) == "session_continuous_causal_sos_before_windowing"
+        assert tuple(archive["channel_order"].tolist()) == tuple(f"emg_{i}" for i in range(8))
+    meta = json.loads((derived / "dataset_meta.json").read_text(encoding="utf-8"))
+    assert list(meta["labels"].values()) == [
+        "POWER_GRASP", "PRECISION_GRASP", "LATERAL_GRASP", "RELEASE", "REST"
+    ]

@@ -24,3 +24,6 @@ def test_trex_server_has_bounded_smoke_and_request_modes() -> None:
     assert '"--smoke_only"' in source
     assert '"--max_requests"' in source
     assert "ZMQ listener was not started" in source
+    assert '"--camera_profile"' in source
+    assert "REVO3_FULL_CENTER_PROFILE" in source
+    assert "image_wrist_right=fixed_center" in source

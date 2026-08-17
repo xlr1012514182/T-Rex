@@ -49,7 +49,15 @@ def _ready_config(tmp_path: Path, *, export_vla: bool = True) -> HardwareCollect
         "allow_hardware_write": True,
         "episode": {
             "episode_id": "injected_episode",
+            "task_id": "fixture-bottle-v1",
+            "task_version": 1,
             "task": "bottle",
+            "object_id": "bottle",
+            "object_instance": "bottle-fixture-01",
+            "operator": "fixture-operator",
+            "collection_day": "synthetic-fixture",
+            "grasp_primitive": "POWER_GRASP",
+            "instruction_source": "manual_canonical",
             "instruction": "Grasp the centered bottle and hold it securely.",
             "duration_s": 0.16,
             "anchor_start_delay_s": 0.05,
@@ -62,6 +70,7 @@ def _ready_config(tmp_path: Path, *, export_vla: bool = True) -> HardwareCollect
         },
         "runtime": {
             "control_step_timeout_ms": 20,
+            "max_command_latency_ms": 20,
             "shutdown_timeout_ms": 50,
             "safety_watchdog_budget_ms": 50,
             "camera_stream": "camera_rectified",
@@ -95,6 +104,7 @@ def _ready_config(tmp_path: Path, *, export_vla: bool = True) -> HardwareCollect
         },
         "camera": {
             "rectified_stream": "camera_rectified",
+            "camera_profile_id": "revo3_full_center_v1",
             "expected_probe_fingerprint": "2" * 64,
             "calibration_file": str(calibration),
             "calibration_sha256": _sha(calibration),
@@ -107,6 +117,12 @@ def _ready_config(tmp_path: Path, *, export_vla: bool = True) -> HardwareCollect
         "tactile": {
             "mode": "visiontouch_force6d",
             "stream": "tactile",
+            "capture_profile": "force6d",
+            "vla_tactile_profile": "ablation_force6d_only",
+            "max_inter_finger_skew_ns": 50_000_000,
+            "checkpoint_family_id": "fixture-revo-profile",
+            "normalization_family_id": "fixture-revo-normalization",
+            "capability_manifest_sha256": "5" * 64,
             "force_model_dir": str(model_root),
             "finger_serials": serials,
             "expected_model_sha256": model_hashes,
@@ -128,7 +144,10 @@ def _sample(stream: str, sequence: int, timestamp_ns: int) -> NativeSample:
     elif stream == "revo_state":
         payload = {"q_rad": np.zeros(21, dtype=np.float32)}
     elif stream == "tactile":
-        payload = {"features": np.zeros((5, 6), dtype=np.float32)}
+        payload = {
+            "features": np.zeros((5, 6), dtype=np.float32),
+            "force6d_finger_timestamp_ns": np.full(5, timestamp_ns, dtype=np.int64),
+        }
     elif stream == "emg":
         payload = {"signal": np.zeros((8, 20), dtype=np.float32)}
     else:
@@ -142,6 +161,44 @@ def _sample(stream: str, sequence: int, timestamp_ns: int) -> NativeSample:
         ),
         payload,
     )
+
+
+def test_visiontouch_profile_and_skew_are_static_readiness_gates(tmp_path: Path) -> None:
+    config = _ready_config(tmp_path)
+    raw = json.loads(config.path.read_text(encoding="utf-8"))
+    raw["tactile"].pop("capture_profile")
+    raw["tactile"].pop("max_inter_finger_skew_ns")
+    config.path.write_text(json.dumps(raw), encoding="utf-8")
+    report = assess_hardware_collection_config(
+        HardwareCollectionConfig.from_json(config.path)
+    )
+    assert "explicit_visiontouch_capture_profile_required" in report.blockers
+    assert "approved_visiontouch_max_inter_finger_skew_ns_required" in report.blockers
+
+
+def test_profile_b_readiness_requires_diff_only_and_no_force_model_claims(
+    tmp_path: Path,
+) -> None:
+    config = _ready_config(tmp_path)
+    raw = json.loads(config.path.read_text(encoding="utf-8"))
+    raw["tactile"].update(
+        capture_profile="diff_only",
+        vla_tactile_profile="profile_b_diff_only",
+        force_model_dir=None,
+        expected_model_sha256={},
+    )
+    config.path.write_text(json.dumps(raw), encoding="utf-8")
+    report = assess_hardware_collection_config(
+        HardwareCollectionConfig.from_json(config.path)
+    )
+    assert report.execute_ready, report.blockers
+
+    raw["tactile"]["vla_tactile_profile"] = "profile_a_force6d_diff"
+    config.path.write_text(json.dumps(raw), encoding="utf-8")
+    report = assess_hardware_collection_config(
+        HardwareCollectionConfig.from_json(config.path)
+    )
+    assert "visiontouch_capture_and_vla_tactile_profile_mismatch" in report.blockers
 
 
 class _VirtualClock:
@@ -236,7 +293,11 @@ class _FakeControlDriver:
             unit="rad",
             joint_order_hash=JOINT_ORDER_HASH,
         )
-        return CollectionControlCycle(receipt)
+        return CollectionControlCycle(
+            receipt,
+            phase="precontact",
+            policy_loss_eligible=True,
+        )
 
 
 class _HangingSensorRunner:

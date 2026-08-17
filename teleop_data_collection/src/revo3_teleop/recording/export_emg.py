@@ -1,13 +1,13 @@
-"""Explicitly annotated EMG projection for the binary intent classifier.
+"""Explicitly reviewed EMG projection for the five-class intent classifier.
 
 Labels never come from glove motion or robot commands.  Every exported window
-must be fully contained in a reviewed OPEN/CLOSE protocol annotation and in a
+must be fully contained in a reviewed primitive protocol annotation and in a
 contiguous, lead-off-free 250 Hz signal segment.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -16,10 +16,15 @@ from typing import Iterable, Literal, Mapping, Sequence
 import numpy as np
 
 from revo3_teleop.recording.recorder import load_native_payload
+from revo3_v1.emg.preprocessing import (
+    BRAINCO_EDU_8CH_250HZ,
+    CausalEMGPreprocessor,
+)
+from revo3_v1.emg.primitives import MAINLINE_CLASS_LABELS
 
 
 SplitName = Literal["train", "val", "test"]
-LABEL_NAMES = {0: "OPEN", 1: "CLOSE"}
+BINARY_LABEL_NAMES = ("OPEN", "CLOSE")
 REVIEWED_SOURCES = frozenset({"protocol_cue_human_reviewed", "manual_human_reviewed"})
 
 
@@ -34,8 +39,8 @@ class EMGLabelInterval:
     def __post_init__(self) -> None:
         if self.start_timestamp_ns < 0 or self.end_timestamp_ns <= self.start_timestamp_ns:
             raise ValueError("EMG label interval must have positive duration")
-        if self.label not in LABEL_NAMES:
-            raise ValueError("EMG label must be 0=OPEN or 1=CLOSE")
+        if not 0 <= self.label < len(MAINLINE_CLASS_LABELS):
+            raise ValueError("EMG label must be an index in the reviewed export vocabulary")
         if self.source not in REVIEWED_SOURCES or not self.human_reviewed:
             raise ValueError("EMG labels must be explicit and human reviewed")
 
@@ -66,11 +71,14 @@ class EMGSessionSpec:
 @dataclass(frozen=True)
 class EMGExportConfig:
     stream: str = "emg"
-    window_samples: int = 250
+    window_samples: int = 500
     stride_samples: int = 125
     channels: int = 8
     sample_rate_hz: int = 250
     maximum_gap_samples: float = 1.5
+    label_names: tuple[str, ...] = MAINLINE_CLASS_LABELS
+    preprocess_session_continuously: bool = True
+    channel_order: tuple[str, ...] = BRAINCO_EDU_8CH_250HZ.channel_order
 
     def __post_init__(self) -> None:
         if not self.stream.strip():
@@ -81,6 +89,10 @@ class EMGExportConfig:
             raise ValueError("BrainCo EDU V1 contract is fixed at 8 channels and 250 Hz")
         if self.maximum_gap_samples < 1.0:
             raise ValueError("maximum_gap_samples must be at least one")
+        if len(self.label_names) < 2 or len(set(self.label_names)) != len(self.label_names):
+            raise ValueError("EMG label_names must be a unique frozen vocabulary")
+        if tuple(self.channel_order) != BRAINCO_EDU_8CH_250HZ.channel_order:
+            raise ValueError("BrainCo channel order changed")
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -194,6 +206,17 @@ def _windows_for_session(
     config: EMGExportConfig,
 ) -> list[tuple[np.ndarray, int, int, int, str]]:
     signal, timestamps, segments = _load_contiguous_signal(session, config)
+    if config.preprocess_session_continuously:
+        filtered = np.empty_like(signal)
+        for segment_id in np.unique(segments):
+            selection = np.flatnonzero(segments == segment_id)
+            processor = CausalEMGPreprocessor(BRAINCO_EDU_8CH_250HZ)
+            filtered[:, selection] = processor.process_chunk(
+                signal[:, selection],
+                sample_rate_hz=config.sample_rate_hz,
+                channel_order=config.channel_order,
+            )
+        signal = filtered
     expected_period_ns = 1_000_000_000 / float(config.sample_rate_hz)
     maximum_gap_ns = int(np.ceil(expected_period_ns * config.maximum_gap_samples))
     windows: list[tuple[np.ndarray, int, int, int, str]] = []
@@ -240,7 +263,7 @@ def _write_jsonl(path: Path, rows: Iterable[Mapping[str, object]]) -> None:
             handle.write(json.dumps(dict(row), ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def export_emg_binary_dataset(
+def export_emg_dataset(
     sessions: Sequence[EMGSessionSpec],
     output_root: str | Path,
     config: EMGExportConfig = EMGExportConfig(),
@@ -249,6 +272,8 @@ def export_emg_binary_dataset(
 
     if not sessions:
         raise ValueError("at least one EMG session is required")
+    if config.preprocess_session_continuously and config.window_samples != 500:
+        raise ValueError("Mainline profile requires 500-sample windows")
     subject_owner: dict[str, str] = {}
     session_ids: set[str] = set()
     for session in sessions:
@@ -258,6 +283,9 @@ def export_emg_binary_dataset(
         if session.session_id in session_ids:
             raise ValueError(f"duplicate session_id: {session.session_id}")
         session_ids.add(session.session_id)
+        invalid = sorted({interval.label for interval in session.intervals if interval.label >= len(config.label_names)})
+        if invalid:
+            raise ValueError(f"EMG interval label outside frozen vocabulary: {invalid}")
 
     destination = Path(output_root).resolve()
     temporary = destination.with_name(f".{destination.name}.inprogress")
@@ -295,7 +323,7 @@ def export_emg_binary_dataset(
                         "window_start_ns": start_ns,
                         "window_end_ns": end_ns,
                         "label": label,
-                        "label_name": LABEL_NAMES[label],
+                        "label_name": config.label_names[label],
                         "label_source": label_source,
                         "source_episode_id": Path(session.episode_root).name,
                     }
@@ -303,15 +331,27 @@ def export_emg_binary_dataset(
         empty = [name for name, rows in rows_by_split.items() if not rows]
         if empty:
             raise ValueError(f"every split needs at least one reviewed window; empty={empty}")
-        np.savez_compressed(
-            temporary / "windows.npz",
-            signal=np.stack(signals).astype(np.float32),
-            label=np.asarray(labels, dtype=np.int64),
-            subject_id=np.asarray(subjects),
-            session_id=np.asarray(session_values),
-            window_start_ns=np.asarray(starts, dtype=np.int64),
-            sample_rate_hz=np.asarray(config.sample_rate_hz, dtype=np.int64),
-        )
+        archive = {
+            "signal": np.stack(signals).astype(np.float32),
+            "label": np.asarray(labels, dtype=np.int64),
+            "subject_id": np.asarray(subjects),
+            "session_id": np.asarray(session_values),
+            "window_start_ns": np.asarray(starts, dtype=np.int64),
+            "sample_rate_hz": np.asarray(config.sample_rate_hz, dtype=np.int64),
+        }
+        if config.preprocess_session_continuously:
+            archive.update({
+                "channel_order": np.asarray(config.channel_order),
+                "preprocessing_profile_id": np.asarray(BRAINCO_EDU_8CH_250HZ.profile_id),
+                "preprocessing_profile_fingerprint": np.asarray(
+                    BRAINCO_EDU_8CH_250HZ.acquisition_fingerprint
+                ),
+                "preprocessed": np.asarray(True),
+                "filter_state_provenance": np.asarray(
+                    "session_continuous_causal_sos_before_windowing"
+                ),
+            })
+        np.savez_compressed(temporary / "windows.npz", **archive)
         for split, rows in rows_by_split.items():
             _write_jsonl(temporary / "manifests" / f"{split}.jsonl", rows)
         metadata = {
@@ -319,8 +359,8 @@ def export_emg_binary_dataset(
             "source_view": "committed_native_emg_only",
             "contains_rgb": False,
             "contains_robot_action": False,
-            "label_policy": "explicit reviewed OPEN/CLOSE intervals only; no glove heuristic",
-            "labels": {str(key): value for key, value in LABEL_NAMES.items()},
+            "label_policy": "explicit human-reviewed primitive intervals only; no glove heuristic or robot heuristic",
+            "labels": {str(key): value for key, value in enumerate(config.label_names)},
             "sample_rate_hz": config.sample_rate_hz,
             "window_samples": config.window_samples,
             "stride_samples": config.stride_samples,
@@ -328,6 +368,22 @@ def export_emg_binary_dataset(
             "counts": {name: len(rows) for name, rows in rows_by_split.items()},
             "source_episode_ids": sorted(
                 {Path(session.episode_root).name for session in sessions}
+            ),
+            "preprocessing_profile_id": (
+                BRAINCO_EDU_8CH_250HZ.profile_id
+                if config.preprocess_session_continuously else None
+            ),
+            "preprocessing_profile_fingerprint": (
+                BRAINCO_EDU_8CH_250HZ.acquisition_fingerprint
+                if config.preprocess_session_continuously else None
+            ),
+            "channel_order": (
+                list(config.channel_order) if config.preprocess_session_continuously else None
+            ),
+            "preprocessed": bool(config.preprocess_session_continuously),
+            "filter_state_provenance": (
+                "session_continuous_causal_sos_before_windowing"
+                if config.preprocess_session_continuously else "unprofiled_binary_fixture"
             ),
         }
         with (temporary / "dataset_meta.json").open("w", encoding="utf-8", newline="\n") as handle:
@@ -338,3 +394,21 @@ def export_emg_binary_dataset(
         # Preserve the in-progress directory for audit rather than deleting data.
         raise
     return destination
+
+
+def export_emg_binary_dataset(
+    sessions: Sequence[EMGSessionSpec],
+    output_root: str | Path,
+    config: EMGExportConfig = EMGExportConfig(),
+) -> Path:
+    """Compatibility-only OPEN/CLOSE exporter used by legacy smoke tests."""
+
+    return export_emg_dataset(
+        sessions,
+        output_root,
+        replace(
+            config,
+            label_names=BINARY_LABEL_NAMES,
+            preprocess_session_continuously=False,
+        ),
+    )

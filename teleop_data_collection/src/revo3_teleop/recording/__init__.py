@@ -6,6 +6,7 @@ from .export_emg import (
     EMGExportConfig,
     EMGLabelInterval,
     EMGSessionSpec,
+    export_emg_dataset,
     export_emg_binary_dataset,
 )
 from .session import CollectionSession, CollectionSessionFault, SessionState
@@ -19,6 +20,7 @@ __all__ = [
     "EMGExportConfig",
     "EMGLabelInterval",
     "EMGSessionSpec",
+    "export_emg_dataset",
     "export_emg_binary_dataset",
     "CollectionSession",
     "CollectionSessionFault",

@@ -127,6 +127,8 @@ class MockTReXBackend:
         refined = _validate_raw_chunk(cached_chunk, name="cached_chunk")
         # A high normalized normal force slightly backs off flexion.  This is
         # just a mock of T-Rex tactile continuation, not the CAIR residual.
+        if observation.tactile_f6 is None:
+            return refined
         normal_force = np.abs(observation.tactile_f6[:, 2])
         overload = max(float(normal_force.max()) - 1.0, 0.0)
         if overload:
@@ -143,6 +145,9 @@ class TReXRevoPolicyAdapter:
 
     def reset(self, reason: str) -> None:
         self.cache.clear(reason)
+        backend_reset = getattr(self.backend, "reset", None)
+        if callable(backend_reset):
+            backend_reset()
 
     def infer(
         self,

@@ -17,6 +17,8 @@ from .types import (
     SafetySignal,
     TaskExecutiveConfig,
     TaskLease,
+    TactileProfileReadiness,
+    completion_state_from_status,
 )
 
 __all__ = [
@@ -36,4 +38,6 @@ __all__ = [
     "TaskExecutive",
     "TaskExecutiveConfig",
     "TaskLease",
+    "TactileProfileReadiness",
+    "completion_state_from_status",
 ]

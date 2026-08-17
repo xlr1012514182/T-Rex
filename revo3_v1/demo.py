@@ -16,7 +16,7 @@ from typing import Dict, List
 
 import numpy as np
 
-from revo3_v1.emg.streaming import BinaryIntentGate, IntentGateConfig
+from revo3_v1.emg.streaming import IntentGateConfig, MulticlassIntentGate
 from revo3_v1.executive import (
     CompletionState,
     EmgEvent,
@@ -28,12 +28,14 @@ from revo3_v1.executive import (
     SafetySignal,
     TaskExecutive,
     TaskExecutiveConfig,
+    TactileProfileReadiness,
 )
 from revo3_v1.planner import (
     AskToClarifyPlanner,
     MockPlannerBackend,
     PlannerRequest,
     SupportedTask,
+    TASK_GRASP_PRIMITIVES,
     VisualGate,
     VisualGateConfig,
 )
@@ -95,9 +97,10 @@ def _tactile_frame(timestamp_ns: int, sequence: int, normal: float) -> TactileFr
 
 
 async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
-    """Run CLOSE + visual start, one full chunk, then optional controlled open."""
+    """Run the frozen task primitive + aligned Planner and optional open."""
 
     base = time.monotonic_ns() + 400_000_000
+    primitive = TASK_GRASP_PRIMITIVES[config.task]
     frame = np.zeros((120, 160, 3), dtype=np.uint8)
     planner = AskToClarifyPlanner(MockPlannerBackend(default_task=config.task))
     visual_gate = VisualGate(
@@ -106,12 +109,14 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
             min_consecutive_ready=2,
         )
     )
-    first = planner.plan(
-        PlannerRequest(emg_action="CLOSE", images=(frame,), timestamp_ns=base - 1_000_000)
-    )
-    visual_gate.update(first, now_ns=base - 1_000_000)
     decision = planner.plan(
-        PlannerRequest(emg_action="CLOSE", images=(frame,), timestamp_ns=base)
+        PlannerRequest.from_aligned_views(
+            primitive=primitive,
+            full_view_history=(frame.copy(), frame.copy(), frame.copy()),
+            center_view=frame,
+            full_view_timestamps_ns=(base - 200_000_000, base - 100_000_000, base),
+            center_timestamp_ns=base,
+        )
     )
     visual = visual_gate.update(decision, now_ns=base)
     if not visual.ready:
@@ -119,11 +124,22 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
 
     # Convert sustained model probability into one debounced edge event.  No
     # raw EMG or EMG embedding is ever passed into the VLA policy.
-    intent_gate = BinaryIntentGate(
+    intent_gate = MulticlassIntentGate(
         IntentGateConfig(close_dwell_ms=300, open_dwell_ms=500)
     )
-    intent_gate.update(config.emg_close_probability, base - 300_000_000, 1.0)
-    start_event = intent_gate.update(config.emg_close_probability, base, 1.0)
+    probabilities = {
+        "POWER_GRASP": 0.01,
+        "PRECISION_GRASP": 0.01,
+        "LATERAL_GRASP": 0.01,
+        "RELEASE": 0.01,
+        "REST": max(0.0, 0.97 - config.emg_close_probability),
+    }
+    probabilities[primitive.value] = config.emg_close_probability
+    start_observation = None
+    for timestamp in range(base - 300_000_000, base + 1, 50_000_000):
+        start_observation = intent_gate.update(probabilities, timestamp, 1.0)
+    assert start_observation is not None
+    start_event = start_observation.event
     if start_event is None:
         raise RuntimeError("mock EMG close failed to pass the intent dwell")
 
@@ -163,6 +179,7 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
             camera_ttl_ns=150_000_000,
             state_ttl_ns=150_000_000,
             touch_ttl_ns=200_000_000,
+            commit_stability_ns=150_000_000,
         ),
         id_factory=iter((f"demo-id-{i}" for i in range(20))).__next__,
     )
@@ -171,7 +188,7 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
         ExecutiveTick(
             now_ns=base,
             emg=EmgEvent(
-                EmgIntent.CLOSE,
+                EmgIntent(primitive.value),
                 start_event.timestamp_ns,
                 start_event.confidence,
                 start_event.event_id,
@@ -185,8 +202,42 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
                 policy_ns=None,
             ),
             versions=versions,
+            tactile_readiness=TactileProfileReadiness.evaluate(
+                profile_kind="A",
+                profile_hash=versions.tactile_profile_hash,
+                force6d_history_frames=16,
+                diff_valid_fingers=5,
+            ),
         )
     )
+    if start.output.value == "WAIT" and start.reason == "atomic_commit_pending":
+        commit_time = base + 150_000_000
+        start = executive.step(
+            ExecutiveTick(
+                now_ns=commit_time,
+                emg=EmgEvent(
+                    EmgIntent.REST,
+                    commit_time,
+                    1.0,
+                ),
+                visual=visual,
+                planner=decision,
+                timestamps=ModalityTimestamps(
+                    camera_ns=decision.timestamp_ns,
+                    state_ns=commit_time,
+                    touch_ns=touch.newest_timestamp_ns,
+                    policy_ns=None,
+                ),
+                versions=versions,
+                tactile_readiness=TactileProfileReadiness.evaluate(
+                    profile_kind="A",
+                    profile_hash=versions.tactile_profile_hash,
+                    force6d_history_frames=16,
+                    diff_valid_fingers=5,
+                ),
+            )
+        )
+        base = commit_time
     if start.output.value != "START" or start.lease is None:
         raise RuntimeError(f"Task Executive did not START: {start.reason}")
 
@@ -202,7 +253,10 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
 
     hand = MockRevoBackend()
     demo_envelope = replace(
-        SafetyEnvelope.demo(max_step_rad=0.06), max_state_age_ns=10_000_000_000
+        SafetyEnvelope.demo(max_step_rad=0.06),
+        max_state_age_ns=10_000_000_000,
+        max_abs_velocity_rad_s=None,
+        max_abs_acceleration_rad_s2=None,
     )
     command_path = RevoCommandPipeline(
         hand, SafetySupervisor(demo_envelope)
@@ -270,6 +324,7 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
         reflex_result = reflex.update(
             _tactile_frame(touch.newest_timestamp_ns, tactile_sequence, normal),
             phase=ReflexPhase.PRECONTACT if offset < 7 else ReflexPhase.HOLD,
+            now_ns=now,
         )
         result = await command_path.execute(
             nominal_q_rad=nominal_target,
@@ -368,6 +423,7 @@ async def run_mock_demo(config: DemoConfig = DemoConfig()) -> Dict[str, object]:
         "schema_version": "revo3-v1-mock-trace-v1",
         "verification_scope": "runnable plumbing smoke; no robot/task-success claim",
         "task": config.task.value,
+        "primitive": primitive.value,
         "instruction": lease.instruction,
         "trigger_grid_hz": str(aligned.grid_hz),
         "policy_hz": MAIN_ALIGNED_SCHEDULE.command_hz,

@@ -35,6 +35,13 @@ class VisualGateResult:
     area: float
     center_distance: float
     timestamp_ns: int
+    produced_at_ns: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        produced = self.timestamp_ns if self.produced_at_ns is None else int(self.produced_at_ns)
+        if self.timestamp_ns < 0 or produced < self.timestamp_ns:
+            raise ValueError("visual gate timestamps must be causal and non-negative")
+        object.__setattr__(self, "produced_at_ns", produced)
 
 
 class VisualGate:
@@ -70,21 +77,32 @@ class VisualGate:
             area=decision.area,
             center_distance=distance,
             timestamp_ns=decision.timestamp_ns,
+            produced_at_ns=int(decision.produced_at_ns),
         )
 
     def update(self, decision: PlannerDecision, *, now_ns: int) -> VisualGateResult:
+        produced_at_ns = int(decision.produced_at_ns)
         if decision.timestamp_ns > now_ns:
             return self._reject(decision, "future_planner_decision")
+        if produced_at_ns > now_ns:
+            return self._reject(decision, "future_planner_result")
         if self._last_timestamp_ns is not None and decision.timestamp_ns <= self._last_timestamp_ns:
             return self._reject(decision, "non_increasing_planner_timestamp")
-        if now_ns - decision.timestamp_ns > self.config.max_decision_age_ns:
-            return self._reject(decision, "stale_planner_decision")
+        if now_ns - produced_at_ns > self.config.max_decision_age_ns:
+            return self._reject(decision, "stale_planner_result")
         if decision.status != PlannerStatus.READY:
             return self._reject(decision, "planner_not_ready")
         if decision.ambiguity.ambiguous:
             return self._reject(decision, "ambiguous_target")
-        if not decision.target_present or not decision.compatible or not decision.near_ready:
+        if (
+            not decision.target_present
+            or not decision.compatible
+            or not decision.near_ready
+            or not decision.center_ready
+        ):
             return self._reject(decision, "target_not_actionable")
+        if decision.ready_frame_count < self.config.min_consecutive_ready:
+            return self._reject(decision, "insufficient_ready_frames")
         if decision.bbox is None or decision.task is None:
             return self._reject(decision, "missing_target_geometry")
         if decision.confidence < self.config.min_confidence:
@@ -109,7 +127,13 @@ class VisualGate:
         self._last_center = center
         self._last_area = decision.area
         self._last_timestamp_ns = decision.timestamp_ns
-        ready = self._consecutive >= self.config.min_consecutive_ready
+        # The planner sees three recent full frames in one call.  Its
+        # ready_frame_count is the primary temporal evidence; this local count
+        # remains an additional consistency check across repeated calls.
+        ready = (
+            decision.ready_frame_count >= self.config.min_consecutive_ready
+            and self._consecutive >= 1
+        )
         return VisualGateResult(
             ready=ready,
             reason="ready" if ready else "awaiting_consecutive_ready",
@@ -118,4 +142,5 @@ class VisualGate:
             area=decision.area,
             center_distance=decision.bbox.center_distance,
             timestamp_ns=decision.timestamp_ns,
+            produced_at_ns=produced_at_ns,
         )

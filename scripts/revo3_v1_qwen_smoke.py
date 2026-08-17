@@ -78,12 +78,15 @@ def _cuda_snapshot() -> dict[str, Any]:
 def _decision_payload(decision: PlannerDecision) -> dict[str, Any]:
     return {
         "status": decision.status.value,
+        "primitive": None if decision.primitive is None else decision.primitive.value,
         "task": None if decision.task is None else decision.task.value,
         "bbox": None if decision.bbox is None else list(decision.bbox.as_xyxy()),
         "area": decision.area,
         "confidence": decision.confidence,
         "target_present": decision.target_present,
         "near_ready": decision.near_ready,
+        "center_ready": decision.center_ready,
+        "ready_frame_count": decision.ready_frame_count,
         "compatible": decision.compatible,
         "instruction": decision.instruction,
     }
@@ -97,8 +100,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--device-map", default="auto")
     parser.add_argument("--torch-dtype", default="auto")
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=128)
     parser.add_argument("--local-files-only", action="store_true")
+    parser.add_argument("--adapter", type=Path)
     parser.add_argument(
         "--require-schema",
         action="store_true",
@@ -109,11 +113,18 @@ def main() -> int:
         parser.error("--max-new-tokens must be positive")
 
     image, image_source = _load_image(args.image)
-    request = PlannerRequest(
-        emg_action="CLOSE",
-        images=(image,),
-        timestamp_ns=time.monotonic_ns(),
-        metadata={"camera_view": "synthetic_smoke"},
+    timestamp_ns = time.monotonic_ns()
+    request = PlannerRequest.from_aligned_views(
+        primitive="POWER_GRASP",
+        full_view_history=(image.copy(), image.copy(), image.copy()),
+        center_view=image,
+        full_view_timestamps_ns=(
+            timestamp_ns - 200_000_000,
+            timestamp_ns - 100_000_000,
+            timestamp_ns,
+        ),
+        center_timestamp_ns=timestamp_ns,
+        metadata={"camera_schema": "synthetic-smoke-aligned-views-v1"},
     )
     backend = Qwen3VLBackend(
         model_id=args.model_id,
@@ -122,6 +133,8 @@ def main() -> int:
         torch_dtype=args.torch_dtype,
         max_new_tokens=args.max_new_tokens,
         local_files_only=args.local_files_only,
+        adapter_path=args.adapter,
+        production=False,
     )
 
     started_ns = time.monotonic_ns()
@@ -131,8 +144,12 @@ def main() -> int:
         "verification_scope": "single model load and deterministic generation",
         "model_id": args.model_id,
         "revision": args.revision,
+        "planner_revision": backend.planner_revision,
+        "deployment_mode": backend.deployment_mode,
+        "adapter_path": None if args.adapter is None else str(args.adapter.resolve()),
         "image_source": image_source,
-        "emg_action": "CLOSE",
+        "emg_action": "POWER_GRASP",
+        "view_contract": "3full+current-center; latest full and center share timestamp",
         "generation_succeeded": False,
         "planner_schema_valid": False,
         "task_success_defined": False,
@@ -155,6 +172,7 @@ def main() -> int:
             decision = PlannerDecision.from_mapping(
                 payload,
                 timestamp_ns=request.timestamp_ns,
+                expected_primitive=request.primitive,
                 raw_response=raw,
             )
             report["planner_schema_valid"] = True

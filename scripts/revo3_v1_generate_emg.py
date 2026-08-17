@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Generate synthetic OPEN/CLOSE EMG data for the Revo3 integration demo."""
+"""Generate binary or explicit five-class synthetic EMG CI fixtures."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from revo3_v1.emg.synthetic import SyntheticEMGConfig, generate_synthetic_dataset
+from revo3_v1.emg.primitives import MAINLINE_CLASS_LABELS
 
 
 def parse_args() -> argparse.Namespace:
@@ -23,9 +24,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subjects", type=int)
     parser.add_argument("--sessions", type=int)
     parser.add_argument("--windows-per-label", type=int)
-    parser.add_argument("--channels", type=int, default=16)
+    parser.add_argument("--channels", type=int)
     parser.add_argument("--sample-rate", type=int)
     parser.add_argument("--window-seconds", type=float)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--fixture-binary",
+        action="store_true",
+        help="emit the legacy OPEN/CLOSE fixture instead of the five-class V1 contract",
+    )
+    mode.add_argument(
+        "--mainline",
+        action="store_true",
+        help="deprecated no-op: five-class V1 generation is now the default",
+    )
     return parser.parse_args()
 
 
@@ -68,11 +80,22 @@ def main() -> None:
     values.update({key: value for key, value in overrides.items() if value is not None})
     if args.window_seconds is not None and args.window_seconds >= values["window_stride_seconds"]:
         values["window_stride_seconds"] = args.window_seconds * 1.05
-    config = SyntheticEMGConfig(n_channels=args.channels, seed=args.seed, **values)
+    mainline = not args.fixture_binary
+    channels = args.channels if args.channels is not None else (8 if mainline else 16)
+    if mainline and args.sample_rate is None:
+        values["sample_rate_hz"] = 250
+    if mainline and args.window_seconds is None:
+        values["window_seconds"] = 2.0
+        values["window_stride_seconds"] = max(values["window_stride_seconds"], 2.1)
+    config = SyntheticEMGConfig(
+        n_channels=channels,
+        seed=args.seed,
+        label_names=tuple(MAINLINE_CLASS_LABELS) if mainline else ("OPEN", "CLOSE"),
+        **values,
+    )
     metadata = generate_synthetic_dataset(args.output, config)
     print(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
     main()
-

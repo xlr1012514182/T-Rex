@@ -87,6 +87,14 @@ Checkpoints released on the Hugging Face Hub:
 The midtrain checkpoint embeds the tactile VQ-VAE, so post-train auto-detects it
 (no separate `VQVAE_CKPT` needed) and encodes tactile codes on the fly.
 
+The “start here” recommendation above describes the original Sharpa/Vega
+embodiment.  The Revo 3 V1 path in this fork intentionally starts from the
+tactile-free official **pretrain** checkpoint, resets all embodiment-specific
+state/action/tactile parameters, and trains Revo-specific tactile components.
+The official midtrain checkpoint is retained only as a heterogeneous-hand
+ablation; its `[16,62]` action head and 10-finger tactile stack must never be
+silently sliced, padded, or treated as a Revo `[16,21]` checkpoint.
+
 ## Dataset Quickstart
 
 The **T-Rex Dataset** public release — ~50 hours, 5,400+ trajectories (22 motor primitives, 200+
@@ -194,6 +202,11 @@ ZMQ REP socket with three request modes:
 - `mode="slow"` — `_run_slow` calls `forward_flow_action_partial(num_steps_total, split_step)`, caches the `[latent | action]` KV at τ_split plus the partially-denoised `x_split`. Returns no actions.
 - `mode="fast"` — `_run_fast` clones the cached KV, takes fresh tactile (F6 + deform; the embedded VQ-VAE tokenizes the raw F6 history from a server-side rolling 16-frame buffer — or, for a legacy external-VQ-VAE checkpoint, encodes codes with the separate `VQVAE_CKPT`), runs the remaining `total - split` Euler steps via `tactile_flow_continue`, and returns the denormalised action chunk.
 - `mode="slow_and_fast"` — both back-to-back; typical at chunk start.
+- `mode="identity"` — returns the immutable server-owned model identity.  The
+  Revo3 production client pins a locally exported manifest, probes this mode
+  before assembly, and revalidates checkpoint/lineage/normalization/profile
+  identity on every subsequent action response.  See
+  [`docs/revo3_v1/README.md`](docs/revo3_v1/README.md).
 
 The ablation `--disable_tactile 1` swaps the slow tick for
 `forward_flow_action_full` (full τ ∈ [0, 1] on the action expert alone)
