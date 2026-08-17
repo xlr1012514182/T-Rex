@@ -247,8 +247,9 @@ class OpenCvCameraClient:
     def stop(self) -> None:
         if self._capture is None:
             return
-        capture, self._capture = self._capture, None
+        capture = self._capture
         capture.release()  # type: ignore[union-attr]
+        self._capture = None
 
 
 class RgbFrameParser:
@@ -382,14 +383,17 @@ class RgbCameraSource:
         if self._client is not None:
             raise RuntimeError("camera source is already started")
         client = self._client_factory()
-        client.start()
+        # Retain ownership before start: an injected client may partially open
+        # a device and then raise.  stop() must remain retryable in that state.
         self._client = client
+        client.start()
 
     def stop(self) -> None:
         if self._client is None:
             return
-        client, self._client = self._client, None
+        client = self._client
         client.stop()
+        self._client = None
 
     def _assign_sequence(self, supplied: int | None) -> int:
         if supplied is None:

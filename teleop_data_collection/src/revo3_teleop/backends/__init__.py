@@ -14,6 +14,23 @@ from .tianji import (
     TianjiSafetyLimits,
     TianjiSide,
     TianjiWriteNotArmed,
+    tianji_joint_order_hash,
+)
+from .tianji_loader import (
+    CallableModuleProvenance,
+    LoadedTianjiSdk,
+    TianjiClientFactoryPlugin,
+    TianjiFeedbackDecoderPlugin,
+    TianjiSdkLoadError,
+    TianjiSdkPluginSpec,
+    TianjiSdkProvenance,
+    load_tianji_sdk,
+    resolve_hashed_callable,
+)
+from .tianji_ctypes import (
+    CtypesMarvinClient,
+    HistoricalMarvinAbiNotAcknowledged,
+    create_ctypes_marvin_client,
 )
 
 __all__ = [
@@ -30,4 +47,17 @@ __all__ = [
     "TianjiSafetyLimits",
     "TianjiSide",
     "TianjiWriteNotArmed",
+    "LoadedTianjiSdk",
+    "CallableModuleProvenance",
+    "TianjiClientFactoryPlugin",
+    "TianjiFeedbackDecoderPlugin",
+    "TianjiSdkLoadError",
+    "TianjiSdkPluginSpec",
+    "TianjiSdkProvenance",
+    "load_tianji_sdk",
+    "resolve_hashed_callable",
+    "CtypesMarvinClient",
+    "HistoricalMarvinAbiNotAcknowledged",
+    "create_ctypes_marvin_client",
+    "tianji_joint_order_hash",
 ]

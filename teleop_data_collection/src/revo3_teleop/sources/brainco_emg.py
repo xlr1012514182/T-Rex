@@ -158,15 +158,19 @@ class BrainCoEduEMGSource:
         if self._client is not None:
             raise RuntimeError("BrainCo EDU EMG source is already started")
         client = self._client_factory()
+        # A failed SDK start may still own a worker thread or module-global
+        # callback.  Retain the client before registration/start so cleanup can
+        # be retried and a second start cannot steal authority.
+        self._client = client
         client.register_emg_callback(self._on_callback)
         client.start()
-        self._client = client
 
     def stop(self) -> None:
         if self._client is None:
             return
-        client, self._client = self._client, None
+        client = self._client
         client.stop()
+        self._client = None
 
     def _on_callback(self, rows: Sequence[Sequence[object]]) -> None:
         self.ingest_rows(rows)

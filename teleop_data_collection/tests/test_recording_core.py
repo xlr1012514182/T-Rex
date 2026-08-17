@@ -94,6 +94,74 @@ def test_native_rate_files_strict_order_and_causal_latest_not_after(tmp_path: Pa
         recorder.append("camera", sample("cam", 12, epoch + 300, rgb=np.zeros((4, 5, 3), np.uint8)))
 
 
+def test_anchor_falls_back_when_latest_capture_arrives_after_decision(tmp_path: Path) -> None:
+    epoch = 1_500_000_000
+    recorder = EpisodeRecorder(tmp_path, episode_id="receive_fallback", epoch_ns=epoch)
+    recorder.start()
+    recorder.append(
+        "camera",
+        NativeSample(
+            SampleHeader(
+                source_id="cam",
+                sequence=0,
+                capture_timestamp_ns=epoch - 200,
+                receive_timestamp_ns=epoch - 100,
+            ),
+            {"rgb": np.zeros((2, 2, 3), np.uint8)},
+        ),
+    )
+    recorder.append(
+        "camera",
+        NativeSample(
+            SampleHeader(
+                source_id="cam",
+                sequence=1,
+                capture_timestamp_ns=epoch - 50,
+                # Models rectification/derived processing that completed only
+                # after the command decision.
+                receive_timestamp_ns=epoch + 5_000,
+            ),
+            {"rgb": np.ones((2, 2, 3), np.uint8)},
+        ),
+    )
+    command = receipt("hand-0", epoch)
+    recorder.record_command(command)
+    anchor = recorder.record_anchor(
+        anchor_index=0,
+        streams=("camera",),
+        hand_command_request_id=command.request_id,
+    )
+    assert anchor.streams["camera"].sequence == 0
+    recorder.abort("receive-availability fallback fixture")
+
+
+def test_anchor_rejects_when_no_sample_was_available_by_decision(tmp_path: Path) -> None:
+    epoch = 1_600_000_000
+    recorder = EpisodeRecorder(tmp_path, episode_id="receive_unavailable", epoch_ns=epoch)
+    recorder.start()
+    recorder.append(
+        "camera",
+        NativeSample(
+            SampleHeader(
+                source_id="cam",
+                sequence=0,
+                capture_timestamp_ns=epoch - 50,
+                receive_timestamp_ns=epoch + 5_000,
+            ),
+            {"rgb": np.zeros((2, 2, 3), np.uint8)},
+        ),
+    )
+    command = receipt("hand-0", epoch)
+    recorder.record_command(command)
+    with pytest.raises(ValueError, match="no causally available sample"):
+        recorder.record_anchor(
+            anchor_index=0,
+            streams=("camera",),
+            hand_command_request_id=command.request_id,
+        )
+    recorder.abort("receive-availability rejection fixture")
+
+
 def test_rejected_or_wrong_component_command_cannot_supervise_anchor(tmp_path: Path) -> None:
     epoch = 2_000_000_000
     recorder = EpisodeRecorder(tmp_path, episode_id="episode_002", epoch_ns=epoch)

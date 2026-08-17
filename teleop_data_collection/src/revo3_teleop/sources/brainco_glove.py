@@ -207,17 +207,25 @@ class BrainCoGloveSource:
         if self._client is not None:
             raise RuntimeError("BrainCo glove source is already started")
         client = self._client_factory()
+        # Retain the concrete client before any callback/start operation.  A
+        # failed or timed-out SDK start may still own module-global callbacks
+        # or a live worker thread; dropping the only reference would make a
+        # deliberate stop/recovery attempt impossible.
+        self._client = client
         client.register_flex_callback(self._on_flex)
         client.register_imu_callback(self._on_imu)
         client.register_mag_callback(self._on_mag)
         client.start()
-        self._client = client
 
     def stop(self) -> None:
         if self._client is None:
             return
-        client, self._client = self._client, None
+        client = self._client
+        # Clear the reference only after a confirmed stop.  If stop raises or
+        # times out, the source remains faulted-but-owned and a second start is
+        # blocked until the same client is successfully stopped.
         client.stop()
+        self._client = None
 
     def _ingest(
         self,

@@ -589,8 +589,23 @@ class EpisodeRecorder:
             entries = self._entries.get(stream, [])
             captures = self._capture_by_stream.get(stream, [])
             selected_index = bisect_right(captures, anchor_ns) - 1
+            # Capture time alone is insufficient for an online-causal
+            # observation.  In particular, a derived camera frame retains the
+            # physical exposure timestamp while its receive timestamp records
+            # when rectification actually completed.  Walk back past any
+            # sample that was not yet available when the controller made this
+            # decision instead of leaking post-decision preprocessing into the
+            # training observation.
+            while selected_index >= 0:
+                candidate_header = entries[selected_index]["header"]
+                candidate_receive_ns = int(candidate_header["receive_timestamp_ns"])
+                if candidate_receive_ns <= receipt.decision_timestamp_ns:
+                    break
+                selected_index -= 1
             if selected_index < 0:
-                raise ValueError(f"no causal sample for stream {stream!r} at anchor {index}")
+                raise ValueError(
+                    f"no causally available sample for stream {stream!r} at anchor {index}"
+                )
             entry = entries[selected_index]
             header = entry["header"]
             if not bool(header["valid"]):
@@ -602,6 +617,10 @@ class EpisodeRecorder:
                 raise ValueError(f"causal sample for stream {stream!r} is stale")
             if receipt.decision_timestamp_ns < capture_ns:
                 raise ValueError("controller decision predates a selected observation")
+            if receipt.decision_timestamp_ns < int(header["receive_timestamp_ns"]):
+                raise ValueError(
+                    "controller decision predates selected observation availability"
+                )
             selected[stream] = StreamReference(
                 stream=stream,
                 source_id=str(header["source_id"]),

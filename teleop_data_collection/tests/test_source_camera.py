@@ -72,15 +72,22 @@ class _FakeCamera:
         self.frames = deque(frames)
         self.start_calls = 0
         self.stop_calls = 0
+        self.fail_start = False
+        self.fail_stop_once = False
 
     def start(self) -> None:
         self.start_calls += 1
+        if self.fail_start:
+            raise RuntimeError("injected camera start failure")
 
     def read(self) -> CameraRead | None:
         return self.frames.popleft() if self.frames else None
 
     def stop(self) -> None:
         self.stop_calls += 1
+        if self.fail_stop_once:
+            self.fail_stop_once = False
+            raise RuntimeError("injected camera stop failure")
 
 
 def test_construction_does_not_open_device_and_start_requires_opt_in() -> None:
@@ -99,6 +106,31 @@ def test_construction_does_not_open_device_and_start_requires_opt_in() -> None:
     assert fake.start_calls == 1
     source.stop()
     assert fake.stop_calls == 1
+
+
+def test_camera_source_retains_failed_start_and_stop_client_for_cleanup() -> None:
+    failed_start = _FakeCamera([])
+    failed_start.fail_start = True
+    source = RgbCameraSource(
+        _config(), client_factory=lambda: failed_start, allow_hardware_start=True
+    )
+    with pytest.raises(RuntimeError, match="start failure"):
+        source.start()
+    failed_start.fail_start = False
+    source.stop()
+
+    failed_stop = _FakeCamera([])
+    failed_stop.fail_stop_once = True
+    source = RgbCameraSource(
+        _config(), client_factory=lambda: failed_stop, allow_hardware_start=True
+    )
+    source.start()
+    with pytest.raises(RuntimeError, match="stop failure"):
+        source.stop()
+    with pytest.raises(RuntimeError, match="already started"):
+        source.start()
+    source.stop()
+    assert failed_stop.stop_calls == 2
 
 
 def test_fake_read_and_callback_paths_share_validation_and_queue() -> None:

@@ -1,31 +1,103 @@
 {
-  "schema_version": "revo3-teleop-config-v1",
+  "schema_version": "revo3-teleop-hardware-v2",
   "mode": "hardware",
   "allow_hardware_write": false,
   "capability_probe_confirmed": false,
-  "revo": {
-    "slave_id": 1,
-    "feedback_velocity_unit": "REPLACE_AFTER_CAPABILITY_PROBE",
-    "feedback_current_unit": "REPLACE_AFTER_CAPABILITY_PROBE"
+  "arm_token_env": "REVO3_TIANJI_ARM_TOKEN",
+  "hand_collection": {
+    "enabled": true,
+    "allow_hand_only_when_arm_blocked": true,
+    "revo_slave_id": 1,
+    "glove_source": "brainco_edu_or_verified_manus"
   },
   "tianji": {
+    "enabled": true,
     "robot_ip": "192.0.2.10",
-    "arm": "right",
-    "joint_order": ["REPLACE_FROM_ACTUAL_SDK_PROBE"],
-    "sdk_position_unit": "deg"
+    "side": "A",
+    "joint_order": [
+      "REPLACE_J0",
+      "REPLACE_J1",
+      "REPLACE_J2",
+      "REPLACE_J3",
+      "REPLACE_J4",
+      "REPLACE_J5",
+      "REPLACE_J6"
+    ],
+    "sdk_position_unit": "deg",
+    "sdk": {
+      "client_factory": null,
+      "client_kwargs": {},
+      "feedback_mode": "pointer_decoder",
+      "feedback_buffer_factory": null,
+      "feedback_decoder": null,
+      "feedback_argument_adapter": null,
+      "expected_module_sha256": null,
+      "expected_feedback_buffer_factory_sha256": null,
+      "expected_feedback_decoder_sha256": null,
+      "expected_feedback_argument_adapter_sha256": null,
+      "native_library_path": null,
+      "expected_native_library_sha256": null,
+      "sdk_identity": "UNVERIFIED",
+      "sdk_version": "UNVERIFIED"
+    },
+    "safety_limits": {
+      "q_min_rad": null,
+      "q_max_rad": null,
+      "max_delta_rad": null,
+      "max_feedback_age_ns": 250000000,
+      "max_target_age_ns": 100000000
+    }
   },
-  "arm_target_source": {
-    "requires_wrist_pose": true,
-    "provides_wrist_pose": false,
-    "tracker": "REPLACE_WITH_ACTUAL_TRACKER"
+  "wrist_pose": {
+    "source_kind": "brainco_edu",
+    "provides_6dof": false,
+    "provider_factory": null,
+    "provider_kwargs": {},
+    "expected_provider_module_sha256": null,
+    "source_frame": "REPLACE_VERIFIED_TRACKER_FRAME",
+    "clock_domain": "workstation_monotonic",
+    "calibration_revision": "UNVERIFIED",
+    "mapping_verified": false,
+    "max_pose_age_ns": 100000000,
+    "minimum_confidence": 0.8
   },
-  "emg": {
-    "channels": 8,
-    "sample_rate_hz": 250,
-    "device_port": "REPLACE_ON_MACHINE"
+  "retargeting": {
+    "ik_solver_factory": null,
+    "ik_solver_kwargs": {},
+    "expected_ik_solver_module_sha256": null,
+    "ik_model_revision": "UNVERIFIED",
+    "calibration_verified": false,
+    "workspace_verified": false,
+    "max_ik_position_residual_m": 0.005,
+    "max_ik_orientation_residual_rad": 0.0523598776,
+    "max_ik_iterations": 200,
+    "calibration": {
+      "revision": "UNVERIFIED",
+      "source_frame": "REPLACE_VERIFIED_TRACKER_FRAME",
+      "robot_base_frame": "REPLACE_TIANJI_BASE_FRAME",
+      "tool_frame": "REPLACE_REVO3_TOOL_FRAME",
+      "source_reference": null,
+      "robot_reference": null,
+      "source_axes_to_robot": null,
+      "translation_gain": null
+    },
+    "cartesian_bounds": {
+      "min_position_m": null,
+      "max_position_m": null,
+      "max_translation_from_reference_m": null,
+      "max_orientation_from_reference_rad": null
+    }
+  },
+  "physical_safety": {
+    "physical_estop_verified": false,
+    "payload_com_verified": false,
+    "tool_transform_verified": false,
+    "watchdog_verified": false,
+    "human_safe_test_fixture_verified": false
   },
   "notes": [
-    "This file intentionally cannot arm hardware as-is.",
-    "Do not replace capture timestamps with callback receive timestamps without recording the clock provenance."
+    "This template intentionally cannot arm or connect hardware as-is.",
+    "BrainCo EDU glove telemetry is hand-only because it has no verified translational 6-DoF wrist pose.",
+    "Use an authenticated tracker or a verified MANUS wrist node plus a robot-specific IK plugin before enabling Tianji targets."
   ]
 }

@@ -14,6 +14,7 @@ from revo3_teleop.backends import (  # noqa: E402
     TianjiMarvinBackend,
     TianjiPhysicalInterventionRequired,
     TianjiSafetyLimits,
+    tianji_joint_order_hash,
 )
 
 
@@ -188,6 +189,17 @@ def test_ongetbuf_side_b_converts_degrees_and_degrees_per_second_to_si() -> None
     np.testing.assert_allclose(state.tau_nm, 2.5)
     assert state.frame_serial == 8
     assert state.side.value == "B"
+
+
+def test_verified_joint_order_is_configurable_and_hashed_at_backend_boundary() -> None:
+    client = FakeNativeClient([feedback(1)])
+    order = tuple(f"verified_joint_{index}" for index in range(7))
+    backend = TianjiMarvinBackend(client, side="A", joint_order=order)
+
+    assert backend.joint_order == order
+    assert backend.joint_order_hash == tianji_joint_order_hash(order)
+    with pytest.raises(ValueError, match="unique"):
+        TianjiMarvinBackend(client, side="A", joint_order=("same",) * 7)
 
 
 def test_position_receipt_records_only_exact_native_transaction_target() -> None:
@@ -392,3 +404,20 @@ def test_close_releases_only_after_state_zero_feedback() -> None:
 
     assert [name for name, _ in client.calls][-2:] == ["OnGetBuf", "OnRelease"]
     assert not backend.connected
+
+
+def test_historical_void_soft_stop_return_is_accepted() -> None:
+    clock = FakeClock()
+    client = FakeNativeClient([feedback(1)])
+
+    def void_soft_stop():
+        client.calls.append(("OnEMG_A", None))
+        return None
+
+    client.OnEMG_A = void_soft_stop
+    backend = TianjiMarvinBackend(client, side="A", clock=clock)
+    backend.connect()
+
+    backend.soft_stop()
+
+    assert client.calls[-1] == ("OnEMG_A", None)

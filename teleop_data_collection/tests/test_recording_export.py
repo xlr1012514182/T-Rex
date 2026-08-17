@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -132,3 +133,39 @@ def test_allowlist_projection_uses_exact_sent_target_and_loads(tmp_path: Path) -
     for stream in ("emg", "glove", "tianji_state"):
         shards = list((committed / "streams" / stream / "shards").glob("*.h5"))
         assert len(shards) == 1
+
+
+def test_export_rejects_sample_received_after_controller_decision(tmp_path: Path) -> None:
+    recorder = EpisodeRecorder(
+        tmp_path / "master",
+        episode_id="late_receive_tamper",
+        epoch_ns=4_000_000_000,
+        metadata={"task": "bottle", "instruction": "Grasp the bottle."},
+    )
+    recorder.start()
+    add_cycle(recorder, 0, 0.1)
+    add_cycle(recorder, 1, 0.2)
+    committed = recorder.commit()
+
+    receipt_rows = [
+        json.loads(line)
+        for line in (committed / "command_receipts.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    index_path = committed / "streams/camera/index.jsonl"
+    index_rows = [
+        json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()
+    ]
+    index_rows[0]["header"]["receive_timestamp_ns"] = (
+        int(receipt_rows[0]["decision_timestamp_ns"]) + 1
+    )
+    index_path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in index_rows),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="received after controller decision"):
+        export_revo3_episode(
+            committed,
+            tmp_path / "derived",
+            Revo3ExportConfig(synthetic_fixture=True),
+        )

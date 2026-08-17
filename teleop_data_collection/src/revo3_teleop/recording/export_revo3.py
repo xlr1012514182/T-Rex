@@ -143,6 +143,7 @@ def _validate_reference(
     stream: str,
     index: Mapping[int, Mapping[str, object]],
     anchor_timestamp_ns: int,
+    decision_timestamp_ns: int,
 ) -> None:
     sequence = int(reference.get("sequence", -1))
     row = index.get(sequence)
@@ -172,6 +173,13 @@ def _validate_reference(
         raise ValueError(f"anchor {stream!r} age_ns is inconsistent")
     if not bool(header.get("valid", False)):
         raise ValueError(f"anchor references invalid {stream!r} sample")
+    receive_ns = int(header.get("receive_timestamp_ns", -1))
+    if receive_ns < 0:
+        raise ValueError(f"anchor references {stream!r} sample without receive timestamp")
+    if receive_ns > decision_timestamp_ns:
+        raise ValueError(
+            f"anchor references {stream!r} sample received after controller decision"
+        )
 
 
 def export_revo3_episode(
@@ -269,6 +277,7 @@ def export_revo3_episode(
                 stream=stream,
                 index=stream_indices[stream],
                 anchor_timestamp_ns=timestamp_ns,
+                decision_timestamp_ns=receipt.decision_timestamp_ns,
             )
             capture_ns = int(reference["capture_timestamp_ns"])
             if capture_ns > timestamp_ns:

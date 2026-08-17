@@ -25,15 +25,22 @@ class FakeEMGClient:
         self.callback = None
         self.start_count = 0
         self.stop_count = 0
+        self.fail_start = False
+        self.fail_stop_once = False
 
     def register_emg_callback(self, callback) -> None:
         self.callback = callback
 
     def start(self) -> None:
         self.start_count += 1
+        if self.fail_start:
+            raise RuntimeError("injected EMG start failure")
 
     def stop(self) -> None:
         self.stop_count += 1
+        if self.fail_stop_once:
+            self.fail_stop_once = False
+            raise RuntimeError("injected EMG stop failure")
 
     def emit(self, rows) -> None:
         assert self.callback is not None
@@ -129,3 +136,31 @@ def test_client_is_lazy_opt_in_and_fake_callback_is_recorded() -> None:
     assert captured[0].header.capture_timestamp_ns == 5_000_000_000
     enabled.stop()
     assert fake.stop_count == 1
+
+
+def test_emg_source_retains_failed_start_and_stop_client_for_cleanup() -> None:
+    failed_start = FakeEMGClient()
+    failed_start.fail_start = True
+    source = BrainCoEduEMGSource(
+        client_factory=lambda: failed_start,
+        allow_hardware_start=True,
+    )
+    with pytest.raises(RuntimeError, match="start failure"):
+        source.start()
+    assert source.started
+    failed_start.fail_start = False
+    source.stop()
+
+    failed_stop = FakeEMGClient()
+    failed_stop.fail_stop_once = True
+    source = BrainCoEduEMGSource(
+        client_factory=lambda: failed_stop,
+        allow_hardware_start=True,
+    )
+    source.start()
+    with pytest.raises(RuntimeError, match="stop failure"):
+        source.stop()
+    assert source.started
+    source.stop()
+    assert not source.started
+    assert failed_stop.stop_count == 2

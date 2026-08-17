@@ -26,6 +26,11 @@ from .manus_ros import (
     ManusRosMessageParser,
     ManusRosSource,
 )
+from .manus_wrist import (
+    LatestManusWristPoseProvider,
+    ManusWristPoseExtractor,
+    VerifiedManusWristConfig,
+)
 
 __all__ = [
     "BrainCoEduEMGParser",
@@ -45,8 +50,11 @@ __all__ = [
     "ManusRosFrame",
     "ManusRosMessageParser",
     "ManusRosSource",
+    "LatestManusWristPoseProvider",
+    "ManusWristPoseExtractor",
     "OUTPUT_COLOUR_ORDER",
     "OpenCvCameraClient",
     "RgbCameraSource",
     "RgbFrameParser",
+    "VerifiedManusWristConfig",
 ]

@@ -34,9 +34,20 @@ TIANJI_JOINT_COUNT = 7
 # invent anatomical names before the exact Tianji model/joint convention is
 # confirmed on the project hardware.
 TIANJI_SDK_JOINT_ORDER = tuple(f"sdk_joint_{index}" for index in range(7))
-TIANJI_JOINT_ORDER_HASH = hashlib.sha256(
-    "\n".join(TIANJI_SDK_JOINT_ORDER).encode("utf-8")
-).hexdigest()
+
+
+def tianji_joint_order_hash(joint_order: Sequence[str]) -> str:
+    """Return the stable controller-label hash for one verified 7-axis order."""
+
+    normalized = tuple(str(name).strip() for name in joint_order)
+    if len(normalized) != TIANJI_JOINT_COUNT:
+        raise ValueError("Tianji joint_order must contain exactly 7 names")
+    if any(not name for name in normalized) or len(set(normalized)) != len(normalized):
+        raise ValueError("Tianji joint_order names must be non-empty and unique")
+    return hashlib.sha256("\n".join(normalized).encode("utf-8")).hexdigest()
+
+
+TIANJI_JOINT_ORDER_HASH = tianji_joint_order_hash(TIANJI_SDK_JOINT_ORDER)
 
 
 class TianjiBackendError(RuntimeError):
@@ -258,6 +269,7 @@ class TianjiMarvinBackend:
         feedback_buffer_factory: FeedbackBufferFactory | None = None,
         feedback_decoder: FeedbackDecoder | None = None,
         feedback_argument_adapter: FeedbackArgumentAdapter | None = None,
+        joint_order: Sequence[str] = TIANJI_SDK_JOINT_ORDER,
         clock: Clock = time.monotonic_ns,
         sleeper: Sleeper = time.sleep,
     ) -> None:
@@ -274,6 +286,8 @@ class TianjiMarvinBackend:
         self.allow_hardware_write = bool(allow_hardware_write)
         self.capability_probe_confirmed = bool(capability_probe_confirmed)
         self._expected_arm_token = token
+        self.joint_order = tuple(str(name).strip() for name in joint_order)
+        self.joint_order_hash = tianji_joint_order_hash(self.joint_order)
         self._feedback_decoder = feedback_decoder
         self._feedback_buffer = (
             None if feedback_buffer_factory is None else feedback_buffer_factory()
@@ -529,14 +543,15 @@ class TianjiMarvinBackend:
             decision_timestamp_ns=decision_ns,
             reason=f"side_{self.side.value}:{reason}",
             unit="rad",
-            joint_order_hash=TIANJI_JOINT_ORDER_HASH,
+            joint_order_hash=self.joint_order_hash,
         )
 
     def _best_effort_soft_stop(self) -> None:
         if not self._connected:
             return
         try:
-            self._call_checked(f"OnEMG_{self.side.value}")
+            # Historical MarvinSDK.h declares OnEMG_* as void.
+            self._call_checked(f"OnEMG_{self.side.value}", allow_none=True)
         except Exception:
             # Preserve the original safety rejection/failure.  A public
             # soft_stop() call remains strict and surfaces its own failure.
@@ -771,7 +786,7 @@ class TianjiMarvinBackend:
                 clipped=False,
                 reason=f"side_{self.side.value}:sent",
                 unit="rad",
-                joint_order_hash=TIANJI_JOINT_ORDER_HASH,
+                joint_order_hash=self.joint_order_hash,
             )
 
     def write_position_rad(
@@ -804,7 +819,8 @@ class TianjiMarvinBackend:
 
         with self._lock:
             self._require_connected()
-            self._call_checked(f"OnEMG_{self.side.value}")
+            # Historical MarvinSDK.h declares OnEMG_* as void.
+            self._call_checked(f"OnEMG_{self.side.value}", allow_none=True)
 
     def _state_transaction(self, state_code: int) -> None:
         self._call_checked("OnClearSet")
@@ -922,6 +938,7 @@ __all__ = [
     "TIANJI_JOINT_COUNT",
     "TIANJI_JOINT_ORDER_HASH",
     "TIANJI_SDK_JOINT_ORDER",
+    "tianji_joint_order_hash",
     "TianjiArmState",
     "TianjiBackendError",
     "TianjiCapabilityReport",

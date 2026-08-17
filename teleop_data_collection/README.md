@@ -37,18 +37,20 @@ master 是证据总账，不是可直接用于任一模型训练的混合数据�
 
 ## 2. 固定来源、用途与许可证边界
 
-所有外部来源由 [`sources.lock.json`](sources.lock.json) 固定到具体 commit。`scripts/bootstrap_sources.py` 只在被忽略的 `vendor/` 下创建 detached checkout，不会把第三方代码或二进制提交进本仓库。
+通用外部来源由 [`sources.lock.json`](sources.lock.json) 固定到具体 commit，Tianji 追加检索与可信度边界由 [`tianji_sources.lock.json`](tianji_sources.lock.json) 固定。`scripts/bootstrap_sources.py` 只在被忽略的 `vendor/` 下创建 detached checkout，不会把第三方代码或二进制提交进本仓库。
 
 | 来源 | 固定版本 | 许可证/可信边界 | 本项目用途 |
 |---|---|---|---|
 | [BrainCo Revo 3 SDK](https://github.com/BrainCoTech/brainco-revo3-sdk) | `7ba96ebd5bee16b730577e2f7c5df98600da53eb` | BrainCoTech 官方组织，但该 commit 根目录无 LICENSE；仅外部使用 | Revo 3 硬件 SDK 参考 |
+| [ViTai SDK Release](https://github.com/ViTai-Tech/ViTai-SDK-Release) | `0071c61a1bf13539ab8c12b537a69e11bb78430a` | ViTai 官方公开 SDK 示例；wheel 与逐 SN 加密模型不 vendoring | `VTSDeviceFinder/VTSensor/FORCE6D_VECTOR` API 交叉核对 |
 | [BrainCo Revo 3 ROS 2](https://github.com/BrainCoTech/brainco_revo3_ros2) | `67442f2811680f8666b7d51a22398d68a945941e` | Apache-2.0；BrainCoTech 官方组织 | 消息与控制器契约参考 |
 | [Revo-Retargeting](https://github.com/BrainCoTech/Revo-Retargeting/tree/revo3_retargeting) | `83087f108b0b853413842e6e185fe4fb509004c5`，分支 `revo3_retargeting` | 混合包声明，MANUS SDK 另有许可证；必须人工确认 | MANUS→Revo 3 重定向工作区参考 |
 | [BrainCo Hand SDK](https://github.com/BrainCoTech/brainco-hand-sdk) | `5c399113efd35f5ce664d5d8f3e8ff750ced5d23` | MIT；BrainCoTech 官方组织 | EDU 手套与 8 通道 EMG 公共数据格式参考 |
 | [TJ_FX_ROBOT_CONTRL_SDK](https://github.com/cynthia-you/TJ_FX_ROBOT_CONTRL_SDK) | `747f5d0279a91d85e32d06008665d96886eff438` | 仓库声明 Apache-2.0，但作者/厂商身份未核验 | 只用于历史 `MarvinSDK.h` 语义交叉检查；不是受支持的运行依赖 |
+| [fiveages-sim/marvin-ros2-control](https://github.com/fiveages-sim/marvin-ros2-control) | `82d836122c3cc4fac1a651fd84acc3591cccc677` | 第三方 wrapper；根目录无 LICENSE、`package.xml` 声明 Apache-2.0；SDK submodule 在公开环境不可访问 | 交叉核对当前 ROS2 wrapper 的调用序列，不能证明厂商 ABI |
 | [wuji-hand-teleop](https://github.com/wuji-technology/wuji-hand-teleop) | `647801345a6a27dec5cbf56280ce63bb8b2f6a32`，tag `v2026.6.13` | 仓库源码 MIT；所带二进制许可证未核验 | 只参考 Tianji 位姿输出集成；不 vendoring 二进制 |
 
-BrainCo 官方仓库可作为对应公开接口的一手来源，但仍应逐仓库检查许可证；Revo 3 SDK 示例仓库在固定 commit 没有根 LICENSE，因此 bootstrap 同样要求人工确认，不能因官方身份推定再分发许可。两个 Tianji/Wuji 来源只是参考证据，**不能替代 Tianji 厂商提供的当前 SDK、头文件、单位说明和安全手册**。仓库只实现了注入式、默认失效闭锁的 Tianji 窄适配层；没有附带或加载未经授权的二进制，缺少真实 SDK、反馈结构与安全验收时仍然无法写真机。
+BrainCo 官方仓库可作为对应公开接口的一手来源，但仍应逐仓库检查许可证；Revo 3 SDK 示例仓库在固定 commit 没有根 LICENSE，因此 bootstrap 同样要求人工确认，不能因官方身份推定再分发许可。公开检索到的 Tianji/Wuji 来源只是第三方或历史参考证据，**不能替代 Tianji 厂商提供的当前 SDK、头文件、单位说明和安全手册**。更细的 Tianji 版本、submodule 可访问性与可信度记录在 [`tianji_sources.lock.json`](tianji_sources.lock.json)。仓库只实现了注入式、默认失效闭锁的 Tianji 窄适配层；没有附带或加载未经授权的二进制，缺少真实 SDK、反馈结构与安全验收时仍然无法写真机。
 
 列出锁定来源：
 
@@ -82,6 +84,22 @@ py -3.10 -m venv .venv-teleop
 & .\.venv-teleop\Scripts\python.exe -m pip install -e ".\teleop_data_collection[dev,camera]"
 ```
 
+需要装配 BrainCo 官方 Python SDK 时，再显式安装锁定的可选依赖；普通 Mock、导出和离线测试不需要它们：
+
+```powershell
+& .\.venv-teleop\Scripts\python.exe -m pip install -e ".\teleop_data_collection[dev,camera,brainco]"
+```
+
+当前适配器固定核对 `bc-revo3-sdk==1.5.1` 和 `bc-edu-sdk==0.5.0`。改变版本必须重新执行接口审计、只读 probe 和台架验收，不能仅关闭版本检查。
+
+Revo3 Ultra VisionTouch 的当前 BrainCo 示例固定安装 `pyvitaisdk4bc==1.0.10`，运行时 import 名为 `pyvitaisdk`。`visiontouch` extra 记录这个精确依赖；如果所用索引不提供该发行包，应按固定 BrainCo commit 中的 `python/install_vts_whl.sh` 从官方 OSS 安装对应平台 wheel，再安装本项目。仓库不分发 SDK wheel，也不分发 `{SN}.onnx.enc` 力模型：
+
+```powershell
+& .\.venv-teleop\Scripts\python.exe -m pip install -e ".\teleop_data_collection[dev,camera,brainco,visiontouch]"
+```
+
+实现所对齐的精确源码位置是 BrainCo [`vision_touch_window.py@7ba96ebd`](https://github.com/BrainCoTech/brainco-revo3-sdk/blob/7ba96ebd5bee16b730577e2f7c5df98600da53eb/python/gui/vision_touch_window.py) 与 ViTai [`vts_force6d.py@0071c61a`](https://github.com/ViTai-Tech/ViTai-SDK-Release/blob/0071c61a1bf13539ab8c12b537a69e11bb78430a/examples/vts_force6d.py)。本地适配只复现公开调用契约，不复制/分发其 SDK 或模型。
+
 本子项目当前会复用仓库根目录下的 `revo3_v1` 数据契约与 Revo 安全写入链。运行源码模块时，应让仓库根目录与子项目 `src` 都可导入：
 
 ```powershell
@@ -89,6 +107,67 @@ $env:PYTHONPATH="$PWD;$PWD\teleop_data_collection\src"
 ```
 
 上述环境变量只对当前 PowerShell 会话生效。
+
+### 3.1 真机 source 装配与只读 capability probe
+
+真机适配分成五个默认关闭的边界：
+
+- `BrainCoRevo3SdkAssembly`：按官方 `bc_revo3_sdk.main_mod` API 枚举并核对唯一 Revo 3、21 维电机状态、碰撞接口、42 维触觉摘要以及可用时的 11 个原始触觉模块；
+- `BrainCoEduSdkEMGClient`：按官方 `bc_edu_sdk.main_mod` API 枚举 8 通道 EDU 臂环，并以 250 Hz、每包 20 点配置回调；
+- `BrainCoEduSdkGloveClient`：严格对齐固定 [`glove_example.py@5c399113`](https://github.com/BrainCoTech/brainco-hand-sdk/blob/5c399113efd35f5ce664d5d8f3e8ff750ced5d23/python/edu/glove_example.py)，只在显式 probe/确认/stream 三重门禁后枚举唯一 VID 21059、PID 6/2 手套，并配置 6 路 flex 50 Hz、calibrated IMU 100 Hz、calibrated magnetometer 20 Hz；
+- `VisionTouchForce6DSource`：严格按显式 `thumb/index/middle/ring/pinky -> SN` 映射枚举五个 U21VT VisionTouch 传感器，逐 SN 校验 `{force_model_dir}/{SN}/{SN}.onnx.enc` 的预期 SHA-256，构造 `VTSensor(config=..., force_model_path=...)`、校准并采集 `FORCE6D_VECTOR`；
+- `ProbedOpenCvCameraClient`：核对相机后端、分辨率、帧率、首帧形状和数据类型；client 返回原生 BGR，`RgbCameraSource` 只做有记录、无损的 BGR→RGB 通道重排，不内置 DINO、SAM、目标跟踪或分割。
+
+EDU SDK 的 EMG/手套 `set_*_data_callback` 都属于同一个进程级全局 namespace。两个 concrete client 共用 `brainco_edu_callback_namespace_status()` 所暴露的 ownership guard；同进程同时启动会被明确阻断。若 SDK 卡在 `start_stream`/`stop_stream` 且线程未退出，client 和 `BrainCoGloveSource` 都会保留线程/client 引用及 callback ownership，拒绝第二实例接管，并要求进程/设备干预；不会为了“恢复”而覆盖全局回调。真实 EMG 与手套同步采集采用两个进程，再以各自 host monotonic timestamp 经 IPC 汇入 recorder。
+
+### 3.2 一键装配的采集编排（默认只审计）
+
+[`configs/hardware_collection.example.json`](configs/hardware_collection.example.json) 是完整 episode 装配模板。默认命令只执行静态 readiness audit：不导入现场 assembly plugin，不扫描 SDK，不打开相机/串口，也不写 Revo/Tianji。
+
+```powershell
+revo3-hardware-collect `
+  --config teleop_data_collection/configs/hardware_collection.example.json
+```
+
+模板必须先由现场证据替换所有占位项，包括 Revo/EMG/相机序列号或 probe fingerprint、21 维关节限位与单位验收、鱼眼标定文件哈希、五指 VisionTouch SN 与逐模型 SHA-256，以及启用 Tianji 时的当前 SDK/ABI、7 轴限位、坐标标定、payload/COM、急停和 arm token。装配工厂本身也必须固定模块 SHA-256；`assembly_factory.kwargs` 会原样作为已检查的 JSON keyword arguments 传给 `factory(config, **kwargs)`，不会静默忽略。工厂只能构造尚未连接的依赖，并必须提供显式 `assert_disconnected`、同步 `abort_construction` 与 episode 结束使用的 `close` 回调；若断连断言失败，loader 会先同步撤销构造，再拒绝运行。相机/串口/IPC 的启动只能发生在 orchestration 生命周期内。任何一项缺失时，CLI 会在导入工厂之前阻断。
+
+仅当 readiness 无 blocker，并且操作员同时给出配置内许可和三项命令行许可，才会执行一个 episode：
+
+```powershell
+revo3-hardware-collect `
+  --config path/to/operator-reviewed-hardware-collection.json `
+  --execute-hardware `
+  --allow-hardware-connect `
+  --allow-hardware-write
+```
+
+运行时职责固定为：原生频率 source 入账、独立 source watchdog、30 Hz `latest-not-after` anchor、每个 anchor 对应唯一 accepted Revo `exact_sent_target`、故障时停止 target 生产并依次执行 Revo hold/Tianji soft-stop、episode quarantine，以及成功后生成不含 EMG/手套/Tianji 的 VLA allowlist 视图。readiness 强制 EMG 与配置的 camera/state/tactile 三路都有 required timeout；三路 VLA stream 必须唯一、已进入 anchor、与 source role 一致且有 timeout。`control_step_timeout_ms` 必须不超过总体 `safety_watchdog_budget_ms`；control driver 卡住会触发 fault，而不是停住 watchdog。`shutdown_timeout_ms` 同时约束 sensor task、辅助 source stop 和 dependency close，超时会标记需要进程/设备干预并 quarantine，绝不声称 clean close。close 被放在原子 commit 之前，所以关闭失败不会发布可训练 episode。原始 EMG 只保留在 master；必须另行提供人工复核的 OPEN/CLOSE 区间，才能导出到独立 `emg_review_root` 数据产品。若手套 IPC 被标为 episode-required，其每个 stream 同样必须配置 watchdog timeout；若明确标为诊断流则不会参与 episode commit 健康门。
+
+BrainCo 手套和 BrainCo EDU EMG 都依赖 `libedu` 的模块级全局 callback，**不能在同一进程同时注册**。启用手套时，配置只接受 `external_timestamped_ipc`：手套 client 在独立采集进程运行，携带明确 clock domain/offset-drift 证据汇入 recorder。公共编排器不会覆盖 callback，也不会猜测 6-flex→21DoF 或 wrist→Tianji 映射；这些映射只能由哈希核验、带标定版本的现场插件提供。
+
+先复制 [`configs/hardware_probe.example.json`](configs/hardware_probe.example.json) 到忽略提交的本地文件，填写设备标签/端口/相机标定文件，将需要检查的 component 设为 `enabled: true`，并将配置内的 `allow_hardware_probe` 设为 `true`。只有配置和命令行双重授权后才会打开设备：
+
+```powershell
+$env:PYTHONPATH="$PWD;$PWD\teleop_data_collection\src"
+py -3.10 -m revo3_teleop.cli.hardware_probe `
+  --config .\outputs\hardware_probe.local.json `
+  --output .\outputs\hardware_capability.json `
+  --allow-hardware-probe
+```
+
+该命令仅生成原子写入的 capability manifest；它强制 `allow_hardware_write: false`，不会发送动作，并明确记录 `probe_only=true`、`hardware_write_performed=false`、`real_hardware_function_verified=false`。probe 成功只证明当次主机上的包版本、设备身份和返回 schema 相容，不证明控制安全、传感单位正确或任务可用。
+
+Revo 3 状态进入内部数据契约前统一使用 SI 单位：角度为 `rad`、角速度为 `rad/s`、电流为 `A`。公开 SDK 对速度/电流的单位证据仍有歧义，因此创建 `Revo3TelemetrySource` 前必须保存与 probe fingerprint、关节顺序 hash 绑定的 `Revo3BenchApproval`，通过受限台架测量选择 `rpm|deg/s` 与 `mA|A`。写入许可还需独立的急停、hold、关节限制和人工 arming；只读 probe 不会生成该许可。
+
+Revo SDK 的普通 Pressure/Matrix 触觉默认保存 42 维 `summary_mn` 和可用时的 11 个原始模块。它们是压力区域汇总，不是六轴力/力矩；即使配置经台架审阅的 `U21VTPressureZoneProjection`，也只输出 `pressure_zones_n[5,6]`，**永远不输出 exporter 保留的 `features`**。
+
+只有独立的 `VisionTouchForce6DSource` 可以生成训练用 `features[5,6]`。五行严格按 `thumb,index,middle,ring,pinky` 排列；每行严格为 `[Fx,Fy,Fz,Mx,My,Mz]`，前三轴单位 N、后三轴单位 Nm。初始化必须满足以下全部条件，否则立即失败而不是补零：五个显式 SN 互不重复且均在 `VTSDeviceFinder.get_sns()` 中；五份加密模型均存在且 SHA-256 与配置一致；SDK 版本为 `1.0.10`；五个 `VTSensor` 均完成 `calibrate()`。采样兼容官方 `extract_force6d_mean` 的两类实际返回：原始 `(6,)` 直接保留；非空 `(...,6)` 对所有 leading 维求 mean。实现额外收紧为最后一维必须**恰好**等于 6，绝不截掉多余 component，也不对缺失 component 补零；空数据、非有限值或过高 rank 都会拒绝整份五指样本。模型 hash、SN 映射、官方源码 commit、聚合规则、轴序与单位写入 episode metadata；每个 sample 以固定宽度的 `[rank,dims...,-1 padding]` 保存五个原始 shape，并保存全指有效位和 host read-start/read-completion 时间。该时间仍不是设备硬件时间。
+
+鱼眼相机始终把未经几何变换的采集帧保存为 `camera_raw`。可选 `OpenCvFisheyeRectifier` 只接受显式物理标定的 `K/D`、人工选择的 `new_K`、输入/输出尺寸和 revision；`FisheyeRectificationConfig.transform_hash()` 将这些内容与插值/边界方式一起固定，派生帧另存为 `camera_rectified`，并保留相同 sequence/capture/device-time 证据和 raw sequence 引用。两条流物理分开，原始帧不会被覆盖；没有标定就禁用 rectifier，不会用 DINO 或其他模型猜校正参数。调用方需把 `RealSensorRunner.camera_episode_metadata` 写入 episode manifest，并在 exporter 中显式选择训练使用 raw 还是 rectified stream。
+
+这些公开接口都没有在当前适配路径中提供可信设备采样时间：相机记录 host read-completion monotonic time，Revo 状态/触觉记录 SDK 调用开始与完成时间，EMG 依据 callback 到达时间、包序号和固定 20 点/250 Hz 结构重建包内时间。所有记录均标明 `device_timestamp_ns=None` 或 host reconstruction，不能被解释成硬件同步时间。
+
+`RealSensorRunner` 仅以相互独立的 native rate 将 `camera_raw`（以及启用时的 `camera_rectified`）、Revo state、普通压力流 `tactile_pressure`、可选 VisionTouch 六维力流 `tactile`，以及**二选一**的 EMG 或 BrainCo glove 原生批送入现有 `CollectionSession.accept_sample`；手套批仍统一经过 `BrainCoGloveSource` 的 row parser 和 host-arrival 时间重建。runner 会拒绝同进程同时传入两个 EDU client。它没有动作命令权限，也不会用最低频率统一降采样。`tactile_episode_metadata` 明确标出只有 VisionTouch 流具备 exporter `features` 资格。Tianji 状态/命令仍由外层注入式 backend 和既有安全事务管理，不由该 runner 导入或实例化。
 
 ## 4. 运行 Mock 端到端数据流
 
@@ -259,7 +338,7 @@ outputs/teleop_mock/derived/revo3_vla/<episode_id>/
 - RGB 图像；
 - `state[21]`；
 - 来自 Revo controller receipt 的 `action[21]`；
-- Revo 3/U21VT 触觉特征 `[5, 6]`；
+- 仅来自逐 SN 模型校验后的 VisionTouch 六轴力特征 `[5, 6]`；
 - 30 Hz 时间、任务 instruction 和必要 provenance。
 
 它明确排除：
@@ -318,7 +397,7 @@ MANUS→Revo 3 可参考 BrainCo 的 `Revo-Retargeting`，但 MANUS SDK 的单�
 
 ### 9.2 BrainCo EDU 手套路径
 
-`BrainCoGloveSource` 按公开示例保存：
+`BrainCoEduSdkGloveClient -> BrainCoGloveSource` 按固定 BrainCo 官方示例保存：
 
 - 6 路 flex，名义 50 Hz；
 - IMU，名义 100 Hz；
@@ -326,9 +405,15 @@ MANUS→Revo 3 可参考 BrainCo 的 `Revo-Retargeting`，但 MANUS SDK 的单�
 
 批回调内较早的行会按名义周期向过去重建时间，但这仍是 host-arrival reconstruction，不是设备时钟。该手套路径固定声明 `provides_wrist_pose=false`：flex、IMU 和磁力计可用于手部重定向研究，但不构成经过验证的 Tianji 末端 6DoF 位姿。
 
-两种 source 都默认 `hardware_autostart=false`；真机启动必须同时注入实际 client/ROS adapter，并显式设置 `allow_hardware_start=True`。
+两种 source 都默认 `hardware_autostart=false`；concrete EDU client 构造时不会 import SDK、扫 USB 或打开串口。真机必须先用 `configs/hardware_probe.example.json` 中默认关闭的 `glove` component 生成只读 fingerprint，再人工确认同一 fingerprint，并同时显式放开 concrete client 的 `allow_hardware_stream` 与 source 的 `allow_hardware_start`。
 
-固定版本的 `bc-edu-sdk` 示例通过模块级 `set_*_data_callback` 注册回调，而不是给每个设备实例绑定独立 callback。若 BrainCo 手套与 BrainCo EMG 腕带要在同机同时运行，V1 默认采用两个独立采集进程并通过带时间戳的 IPC 汇入 recorder；在没有设备 ID 路由实测证据前，不把两个设备塞进同一 SDK 全局 callback 进程。
+固定版本的 `bc-edu-sdk` 示例通过模块级 `set_*_data_callback` 注册回调，而不是给每个设备实例绑定独立 callback。若 BrainCo 手套与 BrainCo EMG 腕带要在同机同时运行，V1 强制采用两个独立采集进程并通过带时间戳的 IPC 汇入 recorder；共享 ownership guard 与 runner 均会阻断同一进程的组合。在没有设备 ID 路由实测证据前，不把两个设备塞进同一 SDK 全局 callback 进程。
+
+### 9.3 手套到 Revo 3 的唯一可执行边界
+
+`RevoHandRetargeter` 只输出带 `calibration_revision`、`model_revision` 和输入样本 provenance 的 canonical `requested_q_rad[21]`；该结果本身不是硬件命令，也不是训练标签。`RevoGloveTeleopController` 强制把它交给 `TeleopRevoWriter -> RevoCommandPipeline -> safety -> awaited backend write`，只有 accepted receipt 的 `exact_sent_target[21]` 可进入 30 Hz action anchor。
+
+MANUS 官方/外部重定向器通过 `PluginRevoHandRetargeter` 或 `load_revo_hand_retargeter(module:factory, expected_module_sha256=...)` 注入，不复制外部代码。非 mock 写入要求 factory 所在可执行模块的 SHA-256 已核对；直接注入但未绑定 hash 的插件只能配合 `MockRevoBackend`。插件还必须显式声明输入类型、校准版本和模型版本，并且输出恰好 21 维有限 rad target。BrainCo EDU 只有 6 路 flex，`BrainCoSixFlexRetargeter` 在没有显式 `BrainCoSixFlexCalibration` 时直接阻断；禁止把 6 个值重复、插值或静默 padding 成 21 维。显式映射需要 `flex_min/max[6]`、`normalized_to_q_matrix[21,6]`、bias、21 维输出边界及版本，超出标定范围的样本拒绝而非外推。
 
 ## 10. EMG 采集边界
 
@@ -353,7 +438,7 @@ EMG 可用于上层 intent/planner 和 Task Executive，但不属于本轮 hand-
 
 ## 11. Tianji：无可信 6DoF wrist pose 必须硬阻断
 
-`TianjiMarvinBackend` 已实现为不携带第三方 SDK 的注入式窄边界，并通过 fake-native tests 核对接口语义；这不是经厂商或真机验证的 backend。`hardware.example.json` 使用文档保留网段 IP、占位关节顺序和 `provides_wrist_pose=false`，因此按设计**不可能 arm**。
+`TianjiMarvinBackend` 已实现为不携带第三方 SDK 的注入式窄边界，并通过 fake-native tests 核对接口语义；这不是经厂商或真机验证的 backend。`hardware.example.json` 使用文档保留网段 IP、占位关节顺序和 `provides_wrist_pose=false`，因此按设计**不可能 arm**，但 `hand_collection.enabled=true`，所以不依赖机械臂的 Revo/手套/EMG 数采仍可继续。
 
 当前实现的关键不变量为：
 
@@ -366,6 +451,35 @@ EMG 可用于上层 intent/planner 和 Task Executive，但不属于本轮 hand-
 - `close()` 只有在 state 0 已确认时才释放连接，否则抛出 `TianjiPhysicalInterventionRequired`，要求现场物理处理。
 
 真实 ctypes feedback 结构必须通过本机厂商 SDK 的 `feedback_buffer_factory` 与 `feedback_decoder` 注入；仓库不会猜结构体布局，也不会复制 Wuji/Tianji 二进制。
+
+新增的 `TianjiSdkPluginSpec`/`load_tianji_sdk()` 使用显式 `python.module:factory` 插件：本地插件负责厂商动态库的 ABI、结构体 packing 和 decoder，本仓库会分别核对 client factory、buffer factory、decoder、可选 argument adapter 以及实际 native library 的 SHA-256，并将 decoder 统一成 `states/inputs/outputs` mapping。手腕位姿 provider 与 IK solver factory 也各自要求独立的 module hash。`normalized_mapping` 模式适配已有 Python wrapper；`pointer_decoder` 模式要求同时提供 buffer factory、decoder 及二者的 hash。缺少或不匹配任何可执行插件 hash 都会阻断真实写入。加载插件本身不会 `OnLinkTo`，也不会启动伺服或写命令。
+
+`HardwareReadinessReport.arm_write_ready` 是实际控制权限的硬门，而不只是诊断文本：只有完整 report 无 blocker、SDK/反馈/手腕/IK 插件均已加载并完成 hash 绑定时，装配器才会创建可写 backend 和 runtime。否则即使 JSON 中误设 `allow_hardware_write=true`、环境中存在 token，返回的 backend 仍永久保持 `allow_hardware_write=false`，并且不构造 runtime。
+
+如果拿到的 SDK 只是 `.so/.dll`，可把 `client_factory` 设为 `revo3_teleop.backends.tianji_ctypes:create_ctypes_marvin_client`。该通用 client 只配置历史 header 中最小函数原型，必须在 `client_kwargs` 同时提供实际 `library_path` 和 `acknowledge_historical_abi=true`；config 还必须对同一路径提供 native SHA-256。loader 会复核 client 实际报告的 `library_path` 与被哈希文件完全相同，防止“校验 A、加载 B”。真实 `DCSS` packing 仍必须由当前 SDK 对应的 buffer/decoder 插件提供，不能沿用猜测结构。
+
+完整机械臂目标链已经拆成可替换但不绕过验证的组件：
+
+```text
+经核验的 MANUS wrist node / 外部 6DoF tracker
+  -> WristPose6D（m + xyzw + frame + clock + calibration revision）
+  -> RelativeWristRetargeter（相对位姿、轴映射、平移增益、笛卡尔边界）
+  -> 注入式 Tianji IKSolver（真实 URDF/tool model revision）
+  -> TianjiJointTargetPlanner（收敛、残差、joint order、pose age）
+  -> TianjiMarvinBackend（反馈、限位、watchdog、arm token、exact sent receipt）
+```
+
+`ManusWristPoseExtractor` 只有在 node id、左右手、位置到米的比例、frame 和 calibration revision 全部显式配置且 `wrist_node_mapping_verified=true` 时才输出 `WristPose6D`。BrainCo EDU 路径即使配置文件错误声称 `provides_6dof=true`，readiness audit 仍会硬拒绝 Tianji arm target；不能用 IMU 姿态补造缺失的平移三轴。
+
+默认无副作用的装配审计命令为：
+
+```powershell
+$env:PYTHONPATH="$PWD;$PWD\teleop_data_collection\src"
+py -3.10 -m revo3_teleop.cli.hardware_dry_run `
+  --config teleop_data_collection/configs/hardware.example.json
+```
+
+该命令默认不 import 插件、不连接设备、不写硬件，并分别输出 `hand_collection_allowed`、`arm_planning_blockers` 和 `arm_write_blockers`。只有希望核对本机插件构造与 method presence 时，才可另加 `--load-sdk-plugin`；这仍不连接机器人。`--load-retargeting-plugins` 只允许使用构造时无硬件副作用的 wrist/IK factory。实际连接、position-state enable 和每次 arm token 授权继续是独立步骤，绝不由 dry-run 自动执行。
 
 机械臂遥操作至少需要一个已校准、带明确坐标系与时钟来源的 6DoF 手腕/控制器位姿。以下情况必须硬阻断 Tianji target 产生和写入：
 
@@ -458,7 +572,16 @@ py -3.10 -m pytest -q teleop_data_collection/tests tests/revo3_v1
 - 导出结果可被现有 `RevoEpisode.load()` 读取；
 - EMG 8×20 packet 解析、lead-off/drop/host-clock 重建与人工标签窗口导出；
 - BrainCo 6-flex 手套固定声明无 6DoF wrist pose；MANUS 只有显式核验的 wrist node 才声明有；
+- Revo 3、普通 Pressure/Matrix 触觉、VisionTouch、OpenCV 相机和 EDU EMG concrete client 默认关闭、双重授权、SDK 版本/API、唯一设备 fingerprint、21/42/11/`5x6` schema 与无设备时间戳语义；
+- Revo 3 台架批准绑定 probe fingerprint/关节顺序并完成 `deg -> rad`、`rpm|deg/s -> rad/s`、`mA|A -> A` 转换；42 维压力摘要即使投影也不能生成 `features`；
+- VisionTouch 五指显式 SN 映射、逐 SN 加密力模型存在性/SHA-256、SDK API、校准生命周期、原始 `(6,)`/非空 `(...,6)` finite 返回与 leading-axis mean、轴序/单位及任一手指异常时的整样本拒绝；
+- 鱼眼 rectifier 绑定 `K/D/new_K`、输入/输出尺寸和版本 hash，保持 `camera_raw` 不变并将派生证据写入独立的 `camera_rectified` 流；
+- real-sensor runner 的独立 native rate、EMG callback 入账、故障传播与 camera/EMG 生命周期关闭；
 - Tianji fake-native 的 rad/degree 转换、A/B 侧、写事务顺序、三重 arming、watchdog、状态 100、错误码、soft-stop 与安全关闭。
+- Tianji 本地 SDK 插件惰性加载、插件文件 SHA-256、加载后保持未连接，以及自定义 7 轴 joint-order receipt hash；
+- BrainCo EDU 即使被错误配置成 `provides_6dof=true` 也无法放开 arm planning；
+- 经核验 MANUS node 的单位换算、相对 wrist retarget、Cartesian 边界、注入式 IK 收敛/残差/joint-order 与 stale-pose 拒绝。
+- BrainCo 6-flex 无映射时拒绝、显式 `[21,6]` 标定映射，以及 MANUS fake retarget 请求必须经过 Revo safety/controller write 后才产生 exact-sent 标签。
 
 该证据等级是 **component-verified synthetic fixture**，只说明接口与数据谱系按测试实现。它不说明：
 
