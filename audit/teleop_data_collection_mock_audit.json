@@ -1,0 +1,21 @@
+{
+  "schema_version": "revo3-teleop-mock-audit-v1",
+  "verification_scope": "synthetic serialization and causal-plumbing only",
+  "episodes": [
+    {"task": "bottle", "master_lifecycle": "committed", "anchors": 4, "revo_exact_sent_matches": 4, "stream_counts": {"camera": 4, "emg": 2, "glove": 13, "revo_state": 11, "tactile": 13, "tianji_state": 11}},
+    {"task": "phone", "master_lifecycle": "committed", "anchors": 4, "revo_exact_sent_matches": 4, "stream_counts": {"camera": 4, "emg": 2, "glove": 13, "revo_state": 11, "tactile": 13, "tianji_state": 11}},
+    {"task": "plastic_bag", "master_lifecycle": "committed", "anchors": 4, "revo_exact_sent_matches": 4, "stream_counts": {"camera": 4, "emg": 2, "glove": 13, "revo_state": 11, "tactile": 13, "tianji_state": 11}},
+    {"task": "refrigerator_door", "master_lifecycle": "committed", "anchors": 4, "revo_exact_sent_matches": 4, "stream_counts": {"camera": 4, "emg": 2, "glove": 13, "revo_state": 11, "tactile": 13, "tianji_state": 11}}
+  ],
+  "revo_controller_targets_compared": 16,
+  "revo_controller_targets_exact_match": 16,
+  "exact_match_rate": 1.0,
+  "task_success_defined": false,
+  "training_approved": false,
+  "claims_excluded": [
+    "physical Tianji or Revo execution",
+    "glove retargeting quality",
+    "real EMG classification accuracy",
+    "task success or clinical benefit"
+  ]
+}

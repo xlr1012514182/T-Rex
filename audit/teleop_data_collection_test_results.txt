@@ -1,0 +1,24 @@
+Revo3 teleoperation data-collection verification
+Date: 2026-08-17 Asia/Shanghai
+Commit under test: 15195b5
+
+Command:
+  $env:PYTHONPATH='teleop_data_collection/src;.'
+  py -3.10 -m pytest -q
+
+Result:
+  149 passed, 1 warning in 18.19s
+
+Additional checks:
+  py -3.10 -m compileall -q teleop_data_collection/src revo3_v1
+  py -3.10 teleop_data_collection/scripts/bootstrap_sources.py --list
+  git diff --check
+
+All additional checks passed. The warning is the existing PyTorch/optree
+FutureWarning; it disables a C++ pytree optimization and is unrelated to the
+collection contracts.
+
+Verified scope: local interfaces, injected SDK boundaries, synthetic native-rate
+recording, causal projection, controller-label serialization, and failure paths.
+Excluded scope: physical robot motion, glove retarget quality, biological EMG
+accuracy, task success, training readiness, and clinical outcomes.
