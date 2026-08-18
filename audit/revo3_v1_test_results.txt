@@ -6,13 +6,13 @@ Component command:
   py -3.10 -m pytest -q tests/revo3_v1
 
 Observed result:
-  288 passed, 2 warnings in 84.06s
+  289 passed, 2 warnings in 56.28s
 
 Full repository command:
   py -3.10 -m pytest -q
 
 Observed result:
-  425 passed, 2 warnings in 110.60s
+  426 passed, 2 warnings in 93.94s
 
 Runtime scheduling stability checks after the final deadline fix:
   complete runtime-factory suite: 5 consecutive runs, 40 passes per run

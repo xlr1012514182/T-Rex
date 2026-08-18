@@ -27,6 +27,10 @@ import subprocess
 import sys
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from revo3_v1.policy.artifacts import (
     validate_revo_deform_artifact,
     validate_revo_vqvae_artifact,
@@ -35,7 +39,6 @@ from revo3_v1.policy.server_identity import build_revo_server_identity
 from revo3_v1.revo.contracts import JOINT_ORDER_HASH
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = REPO_ROOT / "config" / "revo3_v1_trex.json"
 
 EXPECTED_CONTRACT: Dict[str, Any] = {

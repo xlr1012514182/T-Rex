@@ -67,6 +67,6 @@ serve 必须同时提供 frozen statistics 与 companion artifact。launcher 和
 D:\Embodied_AI_Master_Degree\python3_10_4\python.exe -m pytest -q
 ```
 
-最终整仓结果：`425 passed`；其中 `tests/revo3_v1` 为 `288 passed`，
+最终整仓结果：`426 passed`；其中 `tests/revo3_v1` 为 `289 passed`，
 `teleop_data_collection/tests` 为 `137 passed`。两个环境警告分别来自旧版
 `optree` 和 TensorFlow 对 distutils 的弃用提示。

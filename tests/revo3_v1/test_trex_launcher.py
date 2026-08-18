@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import types
@@ -31,6 +32,18 @@ def _write(path: Path, payload) -> None:
 
 
 class RevoTRexLauncherTest(unittest.TestCase):
+    def test_launcher_help_runs_from_repository_root(self):
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--help"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("{train,serve}", completed.stdout)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
