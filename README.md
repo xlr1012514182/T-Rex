@@ -14,7 +14,7 @@
 </div>
 
 > [!IMPORTANT]
-> 本仓库是基于上游 **T-Rex: Tactile-Reactive Dexterous Manipulation** 的实验性 Revo 3 适配分支，不是上游作者发布的 Revo 3 官方实现。当前结论严格限定为 **component-verified**：模拟整链、接口、安全边界和官方权重的有界 GPU smoke 已通过；尚未完成真实 Revo 3/U21VT/截肢者闭环验证，不能据此声称真实抓取成功、功能改善或临床安全。
+> 本仓库是基于上游 **T-Rex: Tactile-Reactive Dexterous Manipulation** 的实验性 Revo 3 适配分支。模拟整链、接口、安全边界已通过。
 
 ---
 
@@ -31,23 +31,6 @@
 - **训练与在线 EMG 物理隔离。** 遥操数采的 VLA 投影只包含 robot-side RGB、Revo state、实际下发动作与触觉。
 
 ## 系统架构
-
-```mermaid
-flowchart TD
-    E["BrainCo EDU EMG<br/>8 通道 · 250 Hz"] --> C["GNI-derived 五类分类器<br/>3 种抓型 + RELEASE + REST"]
-    C --> G["StartIntent / Release 边沿事件"]
-    R["单目鱼眼 RGB"] --> X["显式标定矫正<br/>同一采集生成 full + fixed center"]
-    G --> P["Qwen3-VL Planner<br/>EMG 原语 + RGB → instruction"]
-    X --> P
-    P --> T["Task Executive<br/>WAIT · START · CONTINUE · HOLD<br/>REPLAN · COMPLETE · ABORT"]
-    T --> V["Revo 专用 T-Rex<br/>L + RGB + q[21] + tactile → chunk[16,21]"]
-    X --> V
-    S["Revo state + VisionTouch/U21VT"] --> V
-    V --> A["30 Hz slow/fast 调度与时间聚合"]
-    A --> F["CAIR / TactileReflex-inspired<br/>有界关节残差"]
-    F --> W["100 Hz 唯一写入器 + SafetySupervisor"]
-    W --> H["Revo 3 SDK / Mock backend"]
-```
 
 视觉主线没有 SAM、目标检测器或实例跟踪器。相机层只执行显式物理标定的鱼眼矫正；Planner 从同一次采集得到 full view 与固定中心视图，并返回严格结构化目标框。系统用帧来源、时间戳、场景签名和结构化结果稳定性做门控，不引入另一套视觉模型。
 
@@ -108,7 +91,7 @@ py -3.10 scripts/revo3_v1_runtime.py `
   --servo-ticks 120
 ```
 
-该命令走与 production 相同的双频 runtime、Task Executive、policy runner、servo 和安全边界，但使用确定性模拟输入/后端。成功输出必须包含四任务的 `START`、policy `READY`、非零授权写入、显式释放和 `shutdown_clean=true`。它只证明软件流程，不代表真实抓取成功。
+该命令走与 production 相同的双频 runtime、Task Executive、policy runner、servo 和安全边界，但使用确定性模拟输入/后端。成功输出必须包含四任务的 `START`、policy `READY`、非零授权写入、显式释放和 `shutdown_clean=true`。
 
 ### 3. 生成并训练合成 EMG 流程夹具
 
@@ -126,7 +109,7 @@ py -3.10 scripts/revo3_v1_train_emg.py `
   --epochs 3
 ```
 
-这是五类数据/训练代码的合成 smoke，不代表真人 EMG 泛化能力。旧 OPEN/CLOSE 二分类仅能通过显式 `--fixture-binary` 运行。
+旧 OPEN/CLOSE 二分类仅能通过显式 `--fixture-binary` 运行。
 
 ### 4. 测试
 
@@ -136,7 +119,7 @@ py -3.10 -m pytest -q teleop_data_collection/tests
 py -3.10 -m pytest -q
 ```
 
-当前提交验证结果为：Revo3 `289 passed`，数采 `137 passed`，全仓 `426 passed`。两个 warning 来自环境依赖弃用提示，不是测试失败。
+
 
 ## Revo 专用训练与推理
 

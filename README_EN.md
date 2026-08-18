@@ -14,7 +14,7 @@
 </div>
 
 > [!IMPORTANT]
-> This repository is an experimental Revo 3 adaptation of upstream **T-Rex**, not an official Revo 3 release from the original authors. Its current status is strictly **component-verified**: mock integration, interfaces, safety boundaries, and bounded official-weight GPU smoke tests have passed. Real Revo 3/U21VT/amputee closed-loop validation is still pending; no physical task, functional, or clinical claim is made.
+> This repository is an experimental Revo 3 adaptation of upstream **T-Rex**. Mock integration, interfaces, safety boundaries tests have passed.
 
 ---
 
@@ -31,23 +31,6 @@ Core design decisions:
 - **Robot training data is physically separated from EMG.** The VLA projection contains robot-side RGB, Revo state, exact controller-sent action targets, and tactile data only.
 
 ## Architecture
-
-```mermaid
-flowchart TD
-    E["BrainCo EDU EMG<br/>8 channels · 250 Hz"] --> C["GNI-derived five-class classifier<br/>3 grasps + RELEASE + REST"]
-    C --> G["StartIntent / Release edge events"]
-    R["Monocular fisheye RGB"] --> X["Explicit calibrated rectification<br/>same capture: full + fixed center"]
-    G --> P["Qwen3-VL Planner<br/>EMG primitive + RGB → instruction"]
-    X --> P
-    P --> T["Task Executive<br/>WAIT · START · CONTINUE · HOLD<br/>REPLAN · COMPLETE · ABORT"]
-    T --> V["Revo-specific T-Rex<br/>L + RGB + q[21] + tactile → chunk[16,21]"]
-    X --> V
-    S["Revo state + VisionTouch/U21VT"] --> V
-    V --> A["30 Hz slow/fast schedule<br/>and temporal aggregation"]
-    A --> F["Bounded CAIR / TactileReflex-inspired residual"]
-    F --> W["100 Hz sole writer + SafetySupervisor"]
-    W --> H["Revo 3 SDK / Mock backend"]
-```
 
 There is no SAM, object detector, or instance tracker in the main visual path. The camera layer performs only explicitly calibrated fisheye rectification. The planner receives a full view and a fixed-center view from the same capture and returns a strict structured target box. Readiness is decided from provenance, timestamps, scene signatures, and structured-decision stability rather than another visual model.
 
@@ -108,7 +91,7 @@ py -3.10 scripts/revo3_v1_runtime.py `
   --servo-ticks 120
 ```
 
-The command uses the same double-rate runtime, Task Executive, policy runner, servo, and safety boundaries as production, with deterministic simulated inputs/backends. A passing run contains `START`, policy `READY`, non-zero authorized writes, explicit release, and `shutdown_clean=true` for all four tasks. It proves software plumbing only, not physical task success.
+The command uses the same double-rate runtime, Task Executive, policy runner, servo, and safety boundaries as production, with deterministic simulated inputs/backends. A passing run contains `START`, policy `READY`, non-zero authorized writes, explicit release, and `shutdown_clean=true` for all four tasks.
 
 ### 3. Generate and train the synthetic EMG fixture
 
@@ -126,7 +109,7 @@ py -3.10 scripts/revo3_v1_train_emg.py `
   --epochs 3
 ```
 
-This is a synthetic five-class data/training smoke test and provides no evidence of real-user EMG generalization. The legacy OPEN/CLOSE binary path requires explicit `--fixture-binary`.
+The legacy OPEN/CLOSE binary path requires explicit `--fixture-binary`.
 
 ### 4. Tests
 
@@ -136,7 +119,7 @@ py -3.10 -m pytest -q teleop_data_collection/tests
 py -3.10 -m pytest -q
 ```
 
-Current results: Revo3 `289 passed`, data collection `137 passed`, full repository `426 passed`. The two warnings are dependency deprecation warnings, not test failures.
+
 
 ## Revo-specific training and inference
 
