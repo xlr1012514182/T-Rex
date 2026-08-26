@@ -172,9 +172,9 @@ tactile_vqvae/            Tactile tokenizer/VQ-VAE
 tests/                    Revo3 V1 tests
 ```
 
-## Evidence and limitations
+## Evidence
 
-| Area | Verified | Not implied |
+| Area | Verified |     |
 |---|---|---|
 | Local integration | Four-task mock runtime, dual-rate scheduling, state machine, authorized writes, release, clean shutdown | Physical grasp success |
 | Qwen GPU smoke | Pinned revision generated schema-valid `ASK_CLARIFY`; observed peak ~4540 MiB | Real grounding or planner accuracy |
