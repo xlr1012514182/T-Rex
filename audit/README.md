@@ -43,9 +43,9 @@ The concise promotion and exclusion boundary is in
 From the repository root:
 
 ```powershell
-py -3.10 -m pytest -q tests/revo3_v1  # 289 passed
+py -3.10 -m pytest -q tests/revo3_v1  # 290 passed
 
-py -3.10 -m pytest -q                 # 426 passed
+py -3.10 -m pytest -q                 # 427 passed
 
 py -3.10 scripts/revo3_v1_generate_robot_demo.py `
   --output outputs/revo3_audit_mock/dataset `

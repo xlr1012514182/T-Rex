@@ -1,0 +1,13 @@
+# Minimal, pinned environment for the clone-and-run README workflows.
+# Full training and real-hardware extras remain documented separately.
+h5py==3.16.0
+numpy==2.2.6
+opencv-python-headless==4.12.0.88
+pillow==12.1.1
+pytest==8.3.5
+pyzmq==27.1.0
+scipy==1.15.3
+tokenizers==0.22.2
+torch==2.6.0
+torchvision==0.21.0
+transformers==4.57.3

@@ -274,7 +274,7 @@ py -3.10 scripts/revo3_v1_demo.py `
 py -3.10 -m pytest -q tests/revo3_v1
 ```
 
-当前全仓审计结果为 `426 passed`；其中 Revo3 组件 `289 passed`、数采组件
+当前全仓审计结果为 `427 passed`；其中 Revo3 组件 `290 passed`、数采组件
 `137 passed`。两个环境警告分别来自旧版 `optree` 和 TensorFlow 对 distutils 的弃用提示，均不属于 Revo3 代码失败。
 
 ## 10. 从 T-Rex pretrained 开始训练 Revo 权重

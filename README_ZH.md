@@ -9,7 +9,7 @@
 [![Status](https://img.shields.io/badge/status-component--verified-yellow)](audit/README.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-[English](README_EN.md) · [V1 详细文档](docs/revo3_v1/README.md) · [数采文档](teleop_data_collection/README.md) · [审计证据](audit/README.md) · [上游 T-Rex](https://github.com/ZhuoyangLiu2005/T-Rex)
+[English](README.md) · [V1 详细文档](docs/revo3_v1/README.md) · [数采文档](teleop_data_collection/README.md) · [审计证据](audit/README.md) · [上游 T-Rex](https://github.com/ZhuoyangLiu2005/T-Rex)
 
 </div>
 
@@ -67,124 +67,83 @@
 - Writer：100 Hz；control watchdog 100 ms；servo input timeout 50 ms；IO close timeout 1000 ms。
 - 动作语义：21 维绝对关节目标，仓库内部统一使用 rad/SI；真实 SDK 单位只在 adapter 边界转换。
 
-## 快速开始
+## 下载后直接运行
 
-### 1. 环境
+下面的命令只依赖仓库内文件和公开 Python 包，不需要 T-Rex/Qwen 权重、真实数据或硬件。请选择与你的系统对应的一组命令，并从其第一行开始执行；不要混用 PowerShell 与 Bash 语法。
+
+运行前只需准备：
+
+- Git；
+- Python 3.10；
+- 可访问 PyPI 的网络。
+
+### Windows PowerShell：完整可复制流程
+
+```powershell
+git clone --branch agent/revo3-v1-demo --single-branch https://github.com/xlr1012514182/T-Rex.git
+Set-Location T-Rex
+
+py -3.10 -m venv .venv
+$Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+& $Python -m pip install --upgrade pip
+& $Python -m pip install -r requirements-demo.txt
+
+& $Python scripts/revo3_v1_runtime.py --mode simulation --task all --servo-ticks 120
+
+& $Python scripts/revo3_v1_generate_emg.py --output outputs/emg_synthetic --preset smoke
+& $Python scripts/revo3_v1_train_emg.py --dataset outputs/emg_synthetic --output outputs/emg_smoke_run --from-scratch-ablation --allow-window-reset-fallback --preset smoke --epochs 3
+
+& $Python -m pytest -q tests/revo3_v1
+& $Python -m pytest -q teleop_data_collection/tests
+& $Python -m pytest -q
+```
+
+### Linux Bash：完整可复制流程
 
 ```bash
-conda create -n trex-revo3 python=3.10 -y
-conda activate trex-revo3
+git clone --branch agent/revo3-v1-demo --single-branch https://github.com/xlr1012514182/T-Rex.git
+cd T-Rex
 
-pip install torch==2.6.0 torchvision==0.21.0 \
-  --index-url https://download.pytorch.org/whl/cu124
-pip install -e .
+python3.10 -m venv .venv
+PYTHON=.venv/bin/python
+"$PYTHON" -m pip install --upgrade pip
+"$PYTHON" -m pip install -r requirements-demo.txt
+
+"$PYTHON" scripts/revo3_v1_runtime.py --mode simulation --task all --servo-ticks 120
+
+"$PYTHON" scripts/revo3_v1_generate_emg.py --output outputs/emg_synthetic --preset smoke
+"$PYTHON" scripts/revo3_v1_train_emg.py --dataset outputs/emg_synthetic --output outputs/emg_smoke_run --from-scratch-ablation --allow-window-reset-fallback --preset smoke --epochs 3
+
+"$PYTHON" -m pytest -q tests/revo3_v1
+"$PYTHON" -m pytest -q teleop_data_collection/tests
+"$PYTHON" -m pytest -q
 ```
 
-所有命令都应从仓库根目录执行。Windows 可把 `python` 替换为 `py -3.10`。
-
-### 2. 跑通四任务整链模拟
-
-```powershell
-py -3.10 scripts/revo3_v1_runtime.py `
-  --mode simulation `
-  --task all `
-  --servo-ticks 120
-```
-
-该命令走与 production 相同的双频 runtime、Task Executive、policy runner、servo 和安全边界，但使用确定性模拟输入/后端。成功输出必须包含四任务的 `START`、policy `READY`、非零授权写入、显式释放和 `shutdown_clean=true`。
-
-### 3. 生成并训练合成 EMG 流程夹具
-
-```powershell
-py -3.10 scripts/revo3_v1_generate_emg.py `
-  --output outputs/emg_synthetic `
-  --preset smoke
-
-py -3.10 scripts/revo3_v1_train_emg.py `
-  --dataset outputs/emg_synthetic `
-  --output outputs/emg_smoke_run `
-  --from-scratch-ablation `
-  --allow-window-reset-fallback `
-  --preset smoke `
-  --epochs 3
-```
-
-旧 OPEN/CLOSE 二分类仅能通过显式 `--fixture-binary` 运行。
-
-### 4. 测试
-
-```powershell
-py -3.10 -m pytest -q tests/revo3_v1
-py -3.10 -m pytest -q teleop_data_collection/tests
-py -3.10 -m pytest -q
-```
-
-
+四任务命令使用确定性模拟输入/后端；正常输出应包含 START、policy READY、非零授权写入、显式释放和 shutdown_clean=true。EMG 命令生成并训练五类合成流程夹具；旧 OPEN/CLOSE 二分类只通过显式 --fixture-binary 提供。
 
 ## Revo 专用训练与推理
 
-推荐主线从官方无触觉 pretrain 开始，重建 Revo 相关 state/action/tactile/DIFF/VQ 分支，再执行 `W0 → W1 → Revo midtrain-like → SFT`。官方 62 维双手 midtrain 只作为异构迁移消融，**禁止切片或补零成 21 维主线权重**。
+推荐主线从官方无触觉 pretrain 开始，重建 Revo 相关 state/action/tactile/DIFF/VQ 分支，再执行 W0 → W1 → Revo midtrain-like → SFT。官方 62 维双手 midtrain 只作为异构迁移消融，**禁止切片或补零成 21 维主线权重**。
 
-```bash
-hf download miniFranka/T-Rex_pretrain_mecka22k_epoch1 \
-  --local-dir /checkpoints/trex_pretrain
+真实训练、模型服务和 production runtime 需要外部权重、真实数据、冻结 artifact、硬件配置与用户实现的 bindings，因此不属于“克隆后直接运行”。主页只提供下面这些可立即执行的入口检查：
 
-hf download Qwen/Qwen3-VL-2B-Instruct \
-  --revision 89644892e4d85e24eaac8bacfd4f463576704203 \
-  --local-dir /checkpoints/qwen3-vl-2b-8964489
+```powershell
+$Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+& $Python scripts/revo3_v1_trex.py train --help
+& $Python scripts/revo3_v1_trex.py serve --help
+& $Python scripts/revo3_v1_runtime.py --help
 ```
 
-受审计 launcher 默认只做 dry-run。以下为 W0 命令骨架；真实执行还必须提供通过 readiness/replay/split/normalization/profile 检查的数据和 artifact：
+Linux 使用已经创建的解释器：
 
 ```bash
-python scripts/revo3_v1_trex.py train \
-  --base-model /checkpoints/qwen3-vl-2b-8964489 \
-  --checkpoint /checkpoints/trex_pretrain/checkpoint-0-610000 \
-  --checkpoint-id miniFranka/T-Rex_pretrain_mecka22k_epoch1 \
-  --resume-kind official_pretrain \
-  --stage w0 \
-  --data-json /data/revo3/revo3_trex_train.json \
-  --conversion-manifest /data/revo3/revo3_trex_train_manifest.json \
-  --readiness-manifest /data/revo3/revo3_vla_readiness.json \
-  --development-data-json /data/revo3/revo3_trex_development.json \
-  --development-conversion-manifest /data/revo3/revo3_trex_development_manifest.json \
-  --development-readiness-manifest /data/revo3/revo3_vla_development_readiness.json \
-  --tactile-profile profile_a_force6d_diff \
-  --tactile-profile-manifest /data/revo3/tactile_profile.json \
-  --output-dir /runs/revo3 \
-  --run-name revo3_v1 \
-  --num-processes 1
+PYTHON=.venv/bin/python
+"$PYTHON" scripts/revo3_v1_trex.py train --help
+"$PYTHON" scripts/revo3_v1_trex.py serve --help
+"$PYTHON" scripts/revo3_v1_runtime.py --help
 ```
 
-确认打印出的底层命令后，只有显式加入 `--execute` 才启动训练。normalization、Revo VQ 与 DIFF encoder 只能由 `MIDTRAIN_TRAIN` 拟合；SFT/development/locked test 必须复用同一冻结 artifact，避免数据泄漏。
-
-启动 Revo checkpoint 服务同样默认 dry-run：
-
-```bash
-python scripts/revo3_v1_trex.py serve \
-  --base-model /checkpoints/qwen3-vl-2b-8964489 \
-  --checkpoint /runs/revo3/revo3_v1/checkpoint-X-Y \
-  --stats-path /data/revo3/revo3_trex_midtrain_train_statistics.json \
-  --stats-artifact-path /data/revo3/revo3_trex_midtrain_train_statistics_artifact.json \
-  --identity-manifest-out /data/revo3/revo3_trex_server_identity.json \
-  --cuda 0 \
-  --port 5555
-```
-
-生产 runtime 先做 fail-closed 装配验证：
-
-```bash
-python scripts/revo3_v1_runtime.py \
-  --mode production \
-  --control-config config/revo3_v1_control.json \
-  --runtime-config /data/revo3/runtime.production.json \
-  --bindings-factory my_hardware.bindings:build_bindings \
-  --validate-only
-```
-
-production 省略 `--servo-ticks` 时持续运行，直到 SIGINT/SIGTERM 或 supervisor 请求停止；退出路径必须完成双循环收拢、确认式 SoftStop、policy/planner/backend/IO 有界关闭，否则不会报告 clean shutdown。
-
-完整训练数据契约、阶段参数和 artifact lineage 请阅读 [V1 详细文档](docs/revo3_v1/README.md) 与 [训练数据审计](docs/revo3_v1/TRAINING_DATA_AUDIT.md)。
+准备好官方权重、Revo 真实数据与硬件 artifact 后，再按照 [V1 详细文档](docs/revo3_v1/README.md) 和 [训练数据审计](docs/revo3_v1/TRAINING_DATA_AUDIT.md) 构造 dry-run 命令。详细文档中的 /checkpoints/...、/data/... 等是必须替换的部署路径，不是可直接执行的 Quick Start。
 
 ## 遥操数采与硬件接入
 

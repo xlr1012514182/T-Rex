@@ -9,7 +9,7 @@
 [![Status](https://img.shields.io/badge/status-component--verified-yellow)](audit/README.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-[中文](README.md) · [Detailed V1 documentation (Chinese)](docs/revo3_v1/README.md) · [Data collection guide (Chinese)](teleop_data_collection/README.md) · [Audit evidence](audit/README.md) · [Upstream T-Rex](https://github.com/ZhuoyangLiu2005/T-Rex)
+[中文](README_ZH.md) · [Detailed V1 documentation (Chinese)](docs/revo3_v1/README.md) · [Data collection guide (Chinese)](teleop_data_collection/README.md) · [Audit evidence](audit/README.md) · [Upstream T-Rex](https://github.com/ZhuoyangLiu2005/T-Rex)
 
 </div>
 
@@ -67,124 +67,83 @@ The user is not required to maintain muscle contraction until task completion. A
 - Writer: 100 Hz; 100 ms control watchdog; 50 ms servo-input timeout; 1000 ms IO-close timeout.
 - Action semantics: absolute 21-D joint targets. Internal code uses radians/SI; vendor units are converted only at adapter boundaries.
 
-## Quick start
+## Run immediately after cloning
 
-### 1. Environment
+The commands below depend only on checked-in files and public Python packages. They do not require T-Rex/Qwen weights, real data, or hardware. Choose exactly one operating-system block and run it from the first line; do not mix PowerShell and Bash syntax.
+
+Prerequisites:
+
+- Git;
+- Python 3.10;
+- network access to PyPI.
+
+### Windows PowerShell: complete copy-and-run flow
+
+```powershell
+git clone --branch agent/revo3-v1-demo --single-branch https://github.com/xlr1012514182/T-Rex.git
+Set-Location T-Rex
+
+py -3.10 -m venv .venv
+$Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+& $Python -m pip install --upgrade pip
+& $Python -m pip install -r requirements-demo.txt
+
+& $Python scripts/revo3_v1_runtime.py --mode simulation --task all --servo-ticks 120
+
+& $Python scripts/revo3_v1_generate_emg.py --output outputs/emg_synthetic --preset smoke
+& $Python scripts/revo3_v1_train_emg.py --dataset outputs/emg_synthetic --output outputs/emg_smoke_run --from-scratch-ablation --allow-window-reset-fallback --preset smoke --epochs 3
+
+& $Python -m pytest -q tests/revo3_v1
+& $Python -m pytest -q teleop_data_collection/tests
+& $Python -m pytest -q
+```
+
+### Linux Bash: complete copy-and-run flow
 
 ```bash
-conda create -n trex-revo3 python=3.10 -y
-conda activate trex-revo3
+git clone --branch agent/revo3-v1-demo --single-branch https://github.com/xlr1012514182/T-Rex.git
+cd T-Rex
 
-pip install torch==2.6.0 torchvision==0.21.0 \
-  --index-url https://download.pytorch.org/whl/cu124
-pip install -e .
+python3.10 -m venv .venv
+PYTHON=.venv/bin/python
+"$PYTHON" -m pip install --upgrade pip
+"$PYTHON" -m pip install -r requirements-demo.txt
+
+"$PYTHON" scripts/revo3_v1_runtime.py --mode simulation --task all --servo-ticks 120
+
+"$PYTHON" scripts/revo3_v1_generate_emg.py --output outputs/emg_synthetic --preset smoke
+"$PYTHON" scripts/revo3_v1_train_emg.py --dataset outputs/emg_synthetic --output outputs/emg_smoke_run --from-scratch-ablation --allow-window-reset-fallback --preset smoke --epochs 3
+
+"$PYTHON" -m pytest -q tests/revo3_v1
+"$PYTHON" -m pytest -q teleop_data_collection/tests
+"$PYTHON" -m pytest -q
 ```
 
-Run every command from the repository root. On Windows, `py -3.10` can replace `python`.
-
-### 2. Run the four-task integrated simulation
-
-```powershell
-py -3.10 scripts/revo3_v1_runtime.py `
-  --mode simulation `
-  --task all `
-  --servo-ticks 120
-```
-
-The command uses the same double-rate runtime, Task Executive, policy runner, servo, and safety boundaries as production, with deterministic simulated inputs/backends. A passing run contains `START`, policy `READY`, non-zero authorized writes, explicit release, and `shutdown_clean=true` for all four tasks.
-
-### 3. Generate and train the synthetic EMG fixture
-
-```powershell
-py -3.10 scripts/revo3_v1_generate_emg.py `
-  --output outputs/emg_synthetic `
-  --preset smoke
-
-py -3.10 scripts/revo3_v1_train_emg.py `
-  --dataset outputs/emg_synthetic `
-  --output outputs/emg_smoke_run `
-  --from-scratch-ablation `
-  --allow-window-reset-fallback `
-  --preset smoke `
-  --epochs 3
-```
-
-The legacy OPEN/CLOSE binary path requires explicit `--fixture-binary`.
-
-### 4. Tests
-
-```powershell
-py -3.10 -m pytest -q tests/revo3_v1
-py -3.10 -m pytest -q teleop_data_collection/tests
-py -3.10 -m pytest -q
-```
-
-
+The four-task command uses deterministic simulated inputs/backends; a normal result includes START, policy READY, non-zero authorized writes, explicit release, and shutdown_clean=true. The EMG commands generate and train a synthetic five-class pipeline fixture. The legacy OPEN/CLOSE binary path is available only through explicit --fixture-binary.
 
 ## Revo-specific training and inference
 
-The recommended path starts from the official tactile-free pretrain, rebuilds all Revo-bound state/action/tactile/DIFF/VQ branches, and follows `W0 → W1 → Revo midtrain-like → SFT`. The official 62-D bimanual midtrain is an embodiment-transfer ablation only; **slicing or padding it into the 21-D main path is forbidden**.
+The recommended path starts from the official tactile-free pretrain, rebuilds all Revo-bound state/action/tactile/DIFF/VQ branches, and follows W0 → W1 → Revo midtrain-like → SFT. The official 62-D bimanual midtrain is an embodiment-transfer ablation only; **slicing or padding it into the 21-D main path is forbidden**.
 
-```bash
-hf download miniFranka/T-Rex_pretrain_mecka22k_epoch1 \
-  --local-dir /checkpoints/trex_pretrain
+Real training, serving, and the production runtime require external weights, real data, frozen artifacts, hardware configuration, and user-provided bindings. They are therefore outside the clone-and-run path. The root guide exposes only these immediately runnable entry-point checks:
 
-hf download Qwen/Qwen3-VL-2B-Instruct \
-  --revision 89644892e4d85e24eaac8bacfd4f463576704203 \
-  --local-dir /checkpoints/qwen3-vl-2b-8964489
+```powershell
+$Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+& $Python scripts/revo3_v1_trex.py train --help
+& $Python scripts/revo3_v1_trex.py serve --help
+& $Python scripts/revo3_v1_runtime.py --help
 ```
 
-The audited launcher is dry-run by default. This is the W0 command skeleton; real execution also requires data and artifacts that pass readiness, replay, split, normalization, and tactile-profile checks:
+On Linux, use the interpreter created above:
 
 ```bash
-python scripts/revo3_v1_trex.py train \
-  --base-model /checkpoints/qwen3-vl-2b-8964489 \
-  --checkpoint /checkpoints/trex_pretrain/checkpoint-0-610000 \
-  --checkpoint-id miniFranka/T-Rex_pretrain_mecka22k_epoch1 \
-  --resume-kind official_pretrain \
-  --stage w0 \
-  --data-json /data/revo3/revo3_trex_train.json \
-  --conversion-manifest /data/revo3/revo3_trex_train_manifest.json \
-  --readiness-manifest /data/revo3/revo3_vla_readiness.json \
-  --development-data-json /data/revo3/revo3_trex_development.json \
-  --development-conversion-manifest /data/revo3/revo3_trex_development_manifest.json \
-  --development-readiness-manifest /data/revo3/revo3_vla_development_readiness.json \
-  --tactile-profile profile_a_force6d_diff \
-  --tactile-profile-manifest /data/revo3/tactile_profile.json \
-  --output-dir /runs/revo3 \
-  --run-name revo3_v1 \
-  --num-processes 1
+PYTHON=.venv/bin/python
+"$PYTHON" scripts/revo3_v1_trex.py train --help
+"$PYTHON" scripts/revo3_v1_trex.py serve --help
+"$PYTHON" scripts/revo3_v1_runtime.py --help
 ```
 
-Only an explicit `--execute` starts training after command review. Normalization, Revo VQ, and the DIFF encoder are fitted from `MIDTRAIN_TRAIN` only; SFT/development/locked-test conversion must reuse the same frozen artifacts.
-
-The Revo checkpoint server is also dry-run by default:
-
-```bash
-python scripts/revo3_v1_trex.py serve \
-  --base-model /checkpoints/qwen3-vl-2b-8964489 \
-  --checkpoint /runs/revo3/revo3_v1/checkpoint-X-Y \
-  --stats-path /data/revo3/revo3_trex_midtrain_train_statistics.json \
-  --stats-artifact-path /data/revo3/revo3_trex_midtrain_train_statistics_artifact.json \
-  --identity-manifest-out /data/revo3/revo3_trex_server_identity.json \
-  --cuda 0 \
-  --port 5555
-```
-
-Fail-closed production assembly validation:
-
-```bash
-python scripts/revo3_v1_runtime.py \
-  --mode production \
-  --control-config config/revo3_v1_control.json \
-  --runtime-config /data/revo3/runtime.production.json \
-  --bindings-factory my_hardware.bindings:build_bindings \
-  --validate-only
-```
-
-Production runs continuously when `--servo-ticks` is omitted. SIGINT/SIGTERM and supervisor shutdown follow the same cancellation, confirmed SoftStop, and bounded planner/policy/backend/IO close path. An unconfirmed stop or incomplete close is never reported as clean.
-
-See the [detailed V1 documentation](docs/revo3_v1/README.md) and [training-data audit](docs/revo3_v1/TRAINING_DATA_AUDIT.md) for the complete data contract, stage hyperparameters, and artifact lineage.
+After official weights, real Revo data, and hardware artifacts are available, construct the audited dry-run command from the [detailed V1 documentation](docs/revo3_v1/README.md) and [training-data audit](docs/revo3_v1/TRAINING_DATA_AUDIT.md). Paths such as /checkpoints/... and /data/... in the detailed guide are deployment placeholders that must be replaced; they are not clone-and-run Quick Start commands.
 
 ## Teleoperation data collection and hardware integration
 

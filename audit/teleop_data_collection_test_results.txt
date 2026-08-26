@@ -1,5 +1,5 @@
 Revo3 teleoperation and hardware-collection component verification
-Date: 2026-08-18 Asia/Shanghai
+Date: 2026-08-26 Asia/Shanghai
 Revision under test: agent/revo3-v1-demo working tree before final commit
 
 Teleop command:
@@ -12,7 +12,7 @@ Full repository command:
   py -3.10 -m pytest -q
 
 Observed result:
-  426 passed, 2 warnings in 93.94s
+  427 passed, 2 warnings in 74.06s
 
 Additional checks in this audit round:
   py -3.10 -m compileall -q revo3_v1 teleop_data_collection/src scripts tactile_vqvae
