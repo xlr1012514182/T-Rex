@@ -6,7 +6,6 @@
 
 [![Python 3.10](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch 2.6](https://img.shields.io/badge/PyTorch-2.6-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![Status](https://img.shields.io/badge/status-component--verified-yellow)](audit/README.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [中文](README_ZH.md) · [Detailed V1 documentation (Chinese)](docs/revo3_v1/README.md) · [Data collection guide (Chinese)](teleop_data_collection/README.md) · [Audit evidence](audit/README.md) · [Upstream T-Rex](https://github.com/ZhuoyangLiu2005/T-Rex)
