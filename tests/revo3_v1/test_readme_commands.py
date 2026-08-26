@@ -27,7 +27,7 @@ def test_root_readmes_only_publish_clone_runnable_commands():
     assert "[English](README.md)" in chinese
 
     required_fragments = (
-        "git clone --branch agent/revo3-v1-demo --single-branch",
+        "git -c core.longpaths=true clone --branch agent/revo3-v1-demo --single-branch",
         "requirements-demo.txt",
         "scripts/revo3_v1_runtime.py --mode simulation --task all --servo-ticks 120",
         "scripts/revo3_v1_generate_emg.py",

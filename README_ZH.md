@@ -80,7 +80,7 @@
 ### Windows PowerShell：完整可复制流程
 
 ```powershell
-git clone --branch agent/revo3-v1-demo --single-branch https://github.com/xlr1012514182/T-Rex.git
+git -c core.longpaths=true clone --branch agent/revo3-v1-demo --single-branch https://github.com/xlr1012514182/T-Rex.git
 Set-Location T-Rex
 
 py -3.10 -m venv .venv
