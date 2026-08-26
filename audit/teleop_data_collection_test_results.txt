@@ -1,0 +1,42 @@
+Revo3 teleoperation and hardware-collection component verification
+Date: 2026-08-26 Asia/Shanghai
+Revision under test: agent/revo3-v1-demo working tree before final commit
+
+Teleop command:
+  py -3.10 -m pytest -q teleop_data_collection/tests
+
+Observed result:
+  137 passed, 1 warning in 41.84s
+
+Full repository command:
+  py -3.10 -m pytest -q
+
+Observed result:
+  427 passed, 2 warnings in 74.06s
+
+Additional checks in this audit round:
+  py -3.10 -m compileall -q revo3_v1 teleop_data_collection/src scripts tactile_vqvae
+  parse checked JSON and TOML configurations
+  validate both reproduction matrices
+  validate both synthetic dataset-readiness manifests
+  git diff --check
+  targeted repository credential/endpoint scan
+
+Verified scope:
+  local contracts; pinned-source and injected SDK boundaries; synthetic
+  native-rate recording; capture<=anchor and receive<=controller-decision
+  causality; exporter revalidation; exact-sent nominal controller-label
+  serialization; five-class reviewed EMG export; Profile A Force6D+DIFF and
+  Profile B DIFF-only schemas; fail-closed readiness; startup ownership;
+  bounded control/shutdown/close; quarantine; close-before-commit.
+
+Warnings for the full repository run:
+  The warnings are the existing torch/optree FutureWarning and TensorFlow's
+  distutils deprecation warning. They do not expand or invalidate the verified
+  scope. The standalone teleop result above remains 137 passed, 1 warning.
+
+Explicitly excluded:
+  physical robot motion; physical SDK/device connectivity; calibrated camera,
+  U21VT/VisionTouch, Revo, glove, EMG or Tianji timing and units; retarget
+  quality; biological EMG accuracy; real-data training readiness; task success;
+  paper metrics; hardware safety certification; clinical outcomes.

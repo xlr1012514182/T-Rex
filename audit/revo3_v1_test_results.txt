@@ -1,0 +1,51 @@
+Revo3 V1 functional alignment verification
+Date: 2026-08-26 Asia/Shanghai
+Revision under test: agent/revo3-v1-demo working tree before final commit
+
+Component command:
+  py -3.10 -m pytest -q tests/revo3_v1
+
+Observed result:
+  290 passed, 2 warnings in 45.94s
+
+Full repository command:
+  py -3.10 -m pytest -q
+
+Observed result:
+  427 passed, 2 warnings in 74.06s
+
+Runtime scheduling stability checks after the final deadline fix:
+  complete runtime-factory suite: 5 consecutive runs, 40 passes per run
+  four-task simulation CLI (`--task all --servo-ticks 120`): 3 consecutive passes
+  finite-tick endpoint race: bounded exit with no orphan process
+
+Additional bounded smoke:
+  The default five-class synthetic EMG CLI generated 15 windows shaped
+  [8,500] across subject-exclusive train/val/test splits. A one-epoch CPU
+  from-scratch/window-reset smoke wrote and reloaded a profile-bound
+  checkpoint. This proves only the code path, not biological accuracy.
+
+Verified scope:
+  five-class EMG profile/migration/gating; mandatory planner schema and async
+  worker; single Task Executive; four-task mock online composition; Profile A
+  Force6D plus DIFF readiness; Profile B/Profile C fail-closed boundaries;
+  Revo 21D action/state/data contracts; strict checkpoint migration and
+  training-stage configuration; 30 Hz chunk-16 slow/fast scheduling; delayed
+  first/subsequent-chunk epoch rebase; 100 Hz mock servo with no catch-up burst;
+  bounded/cancellation-safe servo
+  IO and IO close; hard-fault ABORT/confirmed SoftStop propagation; bounded
+  Planner/policy worker close; continuous production runtime and terminal ack;
+  server-owned checkpoint/profile identity binding; bounded CAIR;
+  terminal cleanup; clone-and-run README command/path guards;
+  and negative timing, provenance, shape, hash, lease and safety paths.
+
+Warnings:
+  The warnings are the existing torch/optree FutureWarning and TensorFlow's
+  distutils deprecation warning. They do not expand or invalidate the verified
+  scope.
+
+Explicitly excluded:
+  real Qwen grounding or LoRA quality; Revo-specific T-Rex model training or
+  checkpoint quality; physical hardware, sensors or motor writes; real EMG;
+  physical task success; paper metrics; safety certification; amputee study;
+  clinical outcomes.

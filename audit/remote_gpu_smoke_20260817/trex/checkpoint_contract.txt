@@ -1,0 +1,24 @@
+model_path /mnt/amlfs-02/shared/human_egocentric/dniu/Dex-MoT/mot_arch/ckpts/Qwen3-VL-2B-Instruct
+action_dim 62
+action_chunk 16
+use_robot_state 0
+use_tactile_deform 1
+use_tactile_vec 1
+tactile_intermediate_size 1536
+tactile_num_fingers <missing>
+n_flare_tokens_per_frame 4
+n_flare_steps 8
+use_tactile_code 1
+vqvae_codebook_size 64
+use_tactile_vqvae 1
+cascaded_total_steps 10
+cascaded_split_step 6
+vqvae_config {'window': 16, 'in_channels': 30, 'hidden_channels': 128, 'bottleneck_channels': 256, 'embed_dim': 256, 'n_strided_blocks': 2, 'codebook_size': 64, 'commitment_weight': 0.25, 'decay': 0.99, 'revive_freq': 200, 'revive_threshold': 1.0, 'use_magnitude_weight': True, 'weight_alpha': 2.0, 'weight_tau': 4.0, 'granularity': 'finger', 'n_fingers': 5, 'per_finger_dim': 6, 'init_mode': 'uniform'}
+stats_datasets ['midtrain']
+dataset midtrain
+action {'mask': 62, 'q01': 16, 'q99': 16}
+state {'mask': 62, 'q01': 62, 'q99': 62}
+tactile_f6 {'mask': 60, 'q01': 60, 'q99': 60}
+config_model_type qwen3_vl
+config_hidden_size 2048
+processor_exists True

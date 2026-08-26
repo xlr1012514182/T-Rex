@@ -1,0 +1,91 @@
+{
+  "schema_version": "revo3-teleop-sources-v1",
+  "sources": [
+    {
+      "name": "brainco_revo3_sdk",
+      "url": "https://github.com/BrainCoTech/brainco-revo3-sdk.git",
+      "commit": "7ba96ebd5bee16b730577e2f7c5df98600da53eb",
+      "license": "NOASSERTION (repository has no root LICENSE at pinned commit)",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Revo3 hardware SDK reference",
+      "visiontouch_wheel_source": "python/install_vts_whl.sh at this commit",
+      "visiontouch_wheel_audit_date": "2026-08-17",
+      "visiontouch_wheels": [
+        {
+          "filename": "pyvitaisdk4bc-1.0.10-py3-none-win_amd64.whl",
+          "content_length": 133553595,
+          "etag": "08FB307F0A7EFC9D3CDBD91D1BE50835-13",
+          "sha256": "0a196bc3e0cf49ad5a79558a016e5aed22bae481ce25c88842cb98757708009d"
+        },
+        {
+          "filename": "pyvitaisdk4bc-1.0.10-py3-none-linux_x86_64.whl",
+          "content_length": 136103074,
+          "etag": "1BCDDD8053DC67A98935994AEA14B0CB-13",
+          "sha256": "29bcaa5f9e046d7066e3e3d6f15a117bfb83b3cd726c081bd17158bc54cc3268"
+        },
+        {
+          "filename": "pyvitaisdk4bc-1.0.10-py3-none-linux_aarch64.whl",
+          "content_length": 134795998,
+          "etag": "6DBC0F91C57EDC1C3146EFEA59524C39-13",
+          "sha256": "9a489a081d94dbcbd988f1c6b8bb35d2c1b992ce0c254e8bc3985c6cc6463970"
+        },
+        {
+          "filename": "pyvitaisdk4bc-1.0.10-py3-none-macosx_11_0_arm64.whl",
+          "content_length": 132899742,
+          "etag": "2169DD41831261948BA0B2FBCFE1B643-32",
+          "sha256": "f947b0c6bdb777dfb6fa9178513ec230f72253316b2ed0eedee1d54bb2c3e1b4"
+        }
+      ]
+    },
+    {
+      "name": "vitai_sdk_release",
+      "url": "https://github.com/ViTai-Tech/ViTai-SDK-Release.git",
+      "commit": "0071c61a1bf13539ab8c12b537a69e11bb78430a",
+      "license": "NOASSERTION (repository has no root LICENSE at pinned commit)",
+      "redistribution": "external_only_ack_required",
+      "purpose": "VisionTouch VTSensor/FORCE6D_VECTOR API reference; no wheel or force model redistribution"
+    },
+    {
+      "name": "brainco_revo3_ros2",
+      "url": "https://github.com/BrainCoTech/brainco_revo3_ros2.git",
+      "commit": "67442f2811680f8666b7d51a22398d68a945941e",
+      "license": "Apache-2.0",
+      "redistribution": "external_checkout",
+      "purpose": "Revo3 ROS2 message and controller contract"
+    },
+    {
+      "name": "brainco_retargeting_revo3",
+      "url": "https://github.com/BrainCoTech/Revo-Retargeting.git",
+      "commit": "83087f108b0b853413842e6e185fe4fb509004c5",
+      "branch": "revo3_retargeting",
+      "license": "NOASSERTION (mixed package declarations; MANUS SDK separately licensed)",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Official MANUS-to-Revo3 retargeting workspace"
+    },
+    {
+      "name": "brainco_hand_sdk",
+      "url": "https://github.com/BrainCoTech/brainco-hand-sdk.git",
+      "commit": "5c399113efd35f5ce664d5d8f3e8ff750ced5d23",
+      "license": "MIT",
+      "redistribution": "external_checkout",
+      "purpose": "BrainCo EDU glove and eight-channel EMG acquisition examples"
+    },
+    {
+      "name": "tianji_historical_header_reference",
+      "url": "https://github.com/cynthia-you/TJ_FX_ROBOT_CONTRL_SDK.git",
+      "commit": "747f5d0279a91d85e32d06008665d96886eff438",
+      "license": "Apache-2.0 repository license; author/vendor identity unverified",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Historical MarvinSDK.h semantics cross-check only; not a supported runtime dependency"
+    },
+    {
+      "name": "wuji_hand_teleop_reference",
+      "url": "https://github.com/wuji-technology/wuji-hand-teleop.git",
+      "commit": "647801345a6a27dec5cbf56280ce63bb8b2f6a32",
+      "tag": "v2026.6.13",
+      "license": "MIT for repository source; bundled binary license not verified",
+      "redistribution": "external_only_ack_required",
+      "purpose": "Reference Tianji pose-output integration; binaries are not vendored"
+    }
+  ]
+}

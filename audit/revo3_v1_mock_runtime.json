@@ -1,0 +1,21 @@
+{
+  "commands": [
+    "py -3.10 scripts/revo3_v1_demo.py --task bottle --trace outputs/revo3_audit_mock/demo_bottle.json",
+    "py -3.10 scripts/revo3_v1_demo.py --task phone --trace outputs/revo3_audit_mock/demo_phone.json --hold",
+    "py -3.10 scripts/revo3_v1_demo.py --task plastic_bag --trace outputs/revo3_audit_mock/demo_plastic_bag.json --hold",
+    "py -3.10 scripts/revo3_v1_demo.py --task refrigerator_door --trace outputs/revo3_audit_mock/demo_refrigerator_door.json --hold"
+  ],
+  "executed_at": "2026-08-17 Asia/Shanghai",
+  "all_exit_codes_zero": true,
+  "verification_scope": "runnable plumbing smoke; no robot/task-success claim",
+  "trigger_grid_hz": 10,
+  "policy_hz": 30,
+  "chunk_size": 16,
+  "refine_offsets": [4, 8, 12],
+  "tasks": [
+    {"task": "bottle", "commands_written": 24, "stable_output": "HOLD", "terminal_output": "COMPLETE", "mock_release": true},
+    {"task": "phone", "commands_written": 16, "stable_output": "HOLD", "terminal_output": "HOLD", "mock_release": false},
+    {"task": "plastic_bag", "commands_written": 16, "stable_output": "HOLD", "terminal_output": "HOLD", "mock_release": false},
+    {"task": "refrigerator_door", "commands_written": 16, "stable_output": "HOLD", "terminal_output": "HOLD", "mock_release": false}
+  ]
+}

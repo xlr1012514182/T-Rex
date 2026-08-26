@@ -1,0 +1,59 @@
+{
+  "schema_version": "revo3-teleop-tianji-source-audit-v1",
+  "discovery_cutoff": "2026-08-17",
+  "authoritative_vendor_sdk_found_publicly": false,
+  "runtime_policy": "inject locally supplied vendor SDK through tianji_loader; do not vendor unverified binaries",
+  "sources": [
+    {
+      "name": "fiveages_marvin_ros2_control_wrapper",
+      "url": "https://github.com/fiveages-sim/marvin-ros2-control.git",
+      "branch": "master",
+      "commit": "82d836122c3cc4fac1a651fd84acc3591cccc677",
+      "license": "NOASSERTION at repository root; package.xml declares Apache-2.0",
+      "identity": "third-party ROS2 control wrapper; not authenticated as Tianji vendor",
+      "sdk_submodule_commit": "0b3eb9f49bceb53469ecfbf0aaf22f3876f04d80",
+      "sdk_submodule_access": "private_or_unavailable_publicly",
+      "confidence": "medium for wrapper call sequence; none for current vendor ABI",
+      "use": "source-level cross-check only"
+    },
+    {
+      "name": "cynthia_you_historical_marvin_header",
+      "url": "https://github.com/cynthia-you/TJ_FX_ROBOT_CONTRL_SDK.git",
+      "commit": "747f5d0279a91d85e32d06008665d96886eff438",
+      "commit_date": "2025-11-27T03:40:50Z",
+      "license": "Apache-2.0 repository license",
+      "identity": "author/vendor relationship unverified",
+      "current_main_commit_at_cutoff": "d2123a8c88ff947a6923c352467abcdebff7a343",
+      "current_main_observation": "only LICENSE remains; historical code is not current-main evidence",
+      "confidence": "medium for historical function names and units; none for installed hardware ABI",
+      "use": "historical semantics only; never auto-load its binaries"
+    },
+    {
+      "name": "wuji_hand_teleop_tianji_integration_reference",
+      "url": "https://github.com/wuji-technology/wuji-hand-teleop.git",
+      "tag": "v2026.6.13",
+      "commit": "647801345a6a27dec5cbf56280ce63bb8b2f6a32",
+      "license": "MIT for repository source; bundled Tianji binary license unverified",
+      "identity": "Wuji-authored integration, not Tianji vendor SDK authority",
+      "confidence": "medium for integration pattern; none for binary redistribution",
+      "use": "integration reference only; binaries remain external"
+    }
+  ],
+  "confirmed_common_boundary": {
+    "position_unit": "degree at historical/native boundary; radians internally",
+    "feedback_velocity_unit": "degree_per_second at historical/native boundary; radians_per_second internally",
+    "position_transaction": [
+      "OnClearSet",
+      "OnSetJointCmdPos_A_or_B",
+      "OnSetSend"
+    ],
+    "feedback": "OnGetBuf with locally supplied structure/decoder",
+    "soft_stop": "OnEMG_A_or_B; unrelated to surface EMG sensing"
+  },
+  "unsupported": [
+    "claiming any listed repository is the current official Tianji SDK",
+    "guessing ctypes structure packing for an unknown installed SDK",
+    "redistributing Tianji/Wuji native binaries without verified license",
+    "enabling Tianji motion from BrainCo EDU flex/IMU/magnetometer alone"
+  ]
+}

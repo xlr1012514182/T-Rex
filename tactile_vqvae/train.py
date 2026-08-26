@@ -13,13 +13,15 @@ Example:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
 import sys
 import time
 from dataclasses import asdict
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, Mapping, Optional
 
 import numpy as np
 import torch
@@ -35,7 +37,11 @@ _PARENT   = os.path.dirname(_THIS_DIR)
 if _PARENT not in sys.path:
     sys.path.insert(0, _PARENT)
 
-from tactile_vqvae.data import TacF6Stats, build_train_val_datasets
+from tactile_vqvae.data import (
+    TacF6Stats,
+    build_revo_train_val_datasets,
+    build_train_val_datasets,
+)
 from tactile_vqvae.models import TactileVQVAE
 from tactile_vqvae.models.tactile_vqvae import TactileVQVAEConfig
 
@@ -47,6 +53,13 @@ def parse_args() -> argparse.Namespace:
     # Data
     p.add_argument("--data_root", type=str, required=True,
                    help="Merged midtrain root (contains */pretrain_manifest.json)")
+    p.add_argument("--data_format", choices=("upstream", "revo3"), default="upstream")
+    p.add_argument("--split_manifest", type=str, default="",
+                   help="Required for revo3; split-before-statistics manifest")
+    p.add_argument("--tactile_profile", type=str, default="")
+    p.add_argument("--checkpoint_family_id", type=str, default="")
+    p.add_argument("--normalization_family_id", type=str, default="")
+    p.add_argument("--capability_manifest_sha256", type=str, default="")
     p.add_argument("--window", type=int, default=16)
     p.add_argument("--stride", type=int, default=4,
                    help="Stride between window starts during training (1 = every frame)")
@@ -58,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--bottleneck_channels", type=int, default=256)
     p.add_argument("--embed_dim", type=int, default=256)
     p.add_argument("--n_strided_blocks", type=int, default=2)
-    p.add_argument("--codebook_size", type=int, default=1024)
+    p.add_argument("--codebook_size", type=int, default=64)
     p.add_argument("--commitment_weight", type=float, default=0.25)
     p.add_argument("--decay", type=float, default=0.99)
     p.add_argument("--revive_freq", type=int, default=200)
@@ -66,7 +79,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use_magnitude_weight", type=int, default=1)
     p.add_argument("--weight_alpha", type=float, default=2.0)
     p.add_argument("--weight_tau", type=float, default=4.0)
-    p.add_argument("--granularity", type=str, default="hand",
+    p.add_argument("--granularity", type=str, default="finger",
                    choices=["hand", "finger"],
                    help="hand: 1 code per (hand, window).  finger: 5 codes per "
                         "(hand, window) — encoder/decoder process each finger "
@@ -77,6 +90,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run_name", type=str, default=None)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=256, help="per-GPU")
+    p.add_argument("--global_effective_batch", type=int, default=256,
+                   help="Fail closed unless batch_size*world_size equals this value")
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--min_lr_ratio", type=float, default=0.05)
     p.add_argument("--warmup_steps", type=int, default=500)
@@ -141,6 +156,7 @@ def _save_checkpoint(
     cfg: TactileVQVAEConfig,
     step: int,
     epoch: int,
+    artifact_provenance: Optional[Mapping[str, object]] = None,
 ):
     if not accelerator.is_main_process:
         return
@@ -157,7 +173,36 @@ def _save_checkpoint(
     ckpt_path = os.path.join(out_dir, f"checkpoint_epoch{epoch:03d}.pt")
     torch.save(state, ckpt_path)
     # Also write a `latest.pt` symlink-style copy.
-    torch.save(state, os.path.join(out_dir, "latest.pt"))
+    latest_path = os.path.join(out_dir, "latest.pt")
+    torch.save(state, latest_path)
+    if artifact_provenance is not None:
+        digest = hashlib.sha256()
+        with open(latest_path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        artifact = {
+            "schema_version": "revo3-force6d-vqvae-artifact-v1",
+            "checkpoint": "latest.pt",
+            "checkpoint_sha256": digest.hexdigest(),
+            "trained_from_scratch": True,
+            "source_sensor_family": "revo3_u21vt_force6d",
+            "num_fingers": 5,
+            "window": cfg.window,
+            "stride": 4,
+            "codebook_size": cfg.codebook_size,
+            "embed_dim": cfg.embed_dim,
+            "ema_decay": cfg.decay,
+            "commitment_beta": cfg.commitment_weight,
+            "granularity": cfg.granularity,
+            "locked_test_opened": False,
+            **artifact_provenance,
+        }
+        with open(
+            os.path.join(out_dir, "revo_force6d_vqvae_artifact.json"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            json.dump(artifact, handle, indent=2)
     accelerator.print(f"  ✔ saved checkpoint → {ckpt_path}")
 
 
@@ -207,6 +252,14 @@ def main():
 
     accelerator = Accelerator(mixed_precision=args.mixed_precision)
     device = accelerator.device
+    actual_global_batch = int(args.batch_size) * int(accelerator.num_processes)
+    if actual_global_batch != int(args.global_effective_batch):
+        raise ValueError(
+            "VQ-VAE global effective batch mismatch: "
+            f"batch_size={args.batch_size} * world_size={accelerator.num_processes} "
+            f"= {actual_global_batch}, expected {args.global_effective_batch}. "
+            "Use e.g. 4x64 or 8x32, not 8x256."
+        )
 
     run_name = args.run_name or time.strftime("vqvae_f6_%Y%m%d_%H%M%S")
     run_dir = os.path.join(args.output_dir, run_name)
@@ -219,19 +272,81 @@ def main():
 
     # ── Stats + datasets ──────────────────────────────────────────────────────
     accelerator.print(f"[VQ-VAE] Scanning {args.data_root} for episodes …")
-    stats = TacF6Stats.from_data_root(args.data_root)
+    artifact_provenance = None
+    if args.data_format == "revo3":
+        if not args.split_manifest:
+            raise ValueError("--data_format revo3 requires --split_manifest")
+        reviewed = {
+            "window": (args.window, 16),
+            "stride": (args.stride, 4),
+            "codebook_size": (args.codebook_size, 64),
+            "embed_dim": (args.embed_dim, 256),
+            "commitment_weight": (args.commitment_weight, 0.25),
+            "decay": (args.decay, 0.99),
+            "granularity": (args.granularity, "finger"),
+        }
+        mismatches = {
+            key: (expected, observed)
+            for key, (observed, expected) in reviewed.items()
+            if observed != expected
+        }
+        if mismatches:
+            raise ValueError(f"Revo VQ-VAE frozen contract mismatch: {mismatches}")
+        if args.tactile_profile not in {
+            "profile_a_force6d_diff", "ablation_force6d_only"
+        }:
+            raise ValueError("Revo VQ-VAE requires a Force6D tactile profile")
+        for name in (
+            "checkpoint_family_id",
+            "normalization_family_id",
+            "capability_manifest_sha256",
+        ):
+            value = str(getattr(args, name)).strip()
+            if not value:
+                raise ValueError(f"Revo VQ-VAE requires --{name}")
+        if len(args.capability_manifest_sha256) != 64:
+            raise ValueError("capability_manifest_sha256 must be a SHA-256")
+        split_digest = hashlib.sha256(Path(args.split_manifest).read_bytes()).hexdigest()
+        artifact_provenance = {
+            "tactile_profile": args.tactile_profile,
+            "checkpoint_family_id": args.checkpoint_family_id,
+            "normalization_family_id": args.normalization_family_id,
+            "capability_manifest_sha256": args.capability_manifest_sha256,
+            "split_manifest_sha256": split_digest,
+        }
+        train_ds, val_ds, stats = build_revo_train_val_datasets(
+            data_root=args.data_root,
+            split_manifest=args.split_manifest,
+            window=args.window,
+            stride=args.stride,
+        )
+        train_episode_ids = [episode.meta.episode_id for episode in train_ds.episodes]
+        validation_episode_ids = [episode.meta.episode_id for episode in val_ds.episodes]
+        artifact_provenance.update({
+            "source_splits": ["midtrain_train"],
+            "train_episode_ids": train_episode_ids,
+            "train_episode_ids_sha256": hashlib.sha256(json.dumps(
+                train_episode_ids, ensure_ascii=True, separators=(",", ":")
+            ).encode("utf-8")).hexdigest(),
+            "validation_split": "development",
+            "validation_episode_ids": validation_episode_ids,
+            "validation_episode_ids_sha256": hashlib.sha256(json.dumps(
+                validation_episode_ids, ensure_ascii=True, separators=(",", ":")
+            ).encode("utf-8")).hexdigest(),
+        })
+    else:
+        stats = TacF6Stats.from_data_root(args.data_root)
+        train_ds, val_ds, _ = build_train_val_datasets(
+            data_root=args.data_root,
+            window=args.window,
+            stride=args.stride,
+            val_ratio=args.val_ratio,
+            seed=args.seed,
+            stats=stats,
+        )
     accelerator.print(
         f"[VQ-VAE] tacf6_min[:6] = {stats.tacf6_min[:6]}, "
         f"tacf6_max[:6] = {stats.tacf6_max[:6]}")
-
-    train_ds, val_ds, _ = build_train_val_datasets(
-        data_root=args.data_root,
-        window=args.window,
-        stride=args.stride,
-        val_ratio=args.val_ratio,
-        seed=args.seed,
-        stats=stats,
-    )
     accelerator.print(
         f"[VQ-VAE] train: {train_ds.num_episodes} eps / {len(train_ds)} windows ;"
         f" val: {val_ds.num_episodes} eps / {len(val_ds)} windows")
@@ -350,6 +465,7 @@ def main():
             _save_checkpoint(
                 accelerator, run_dir,
                 model, optimizer, stats, cfg, global_step, epoch,
+                artifact_provenance,
             )
 
     # Final save (smoke test or last epoch).
@@ -357,6 +473,7 @@ def main():
         accelerator, run_dir,
         model, optimizer, stats, cfg, global_step,
         epoch=args.epochs - 1 if not args.smoke_test else 0,
+        artifact_provenance=artifact_provenance,
     )
 
     if use_wandb and accelerator.is_main_process:

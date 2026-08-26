@@ -25,6 +25,7 @@ if _PROJECT_DIR not in sys.path:
     sys.path.insert(0, _PROJECT_DIR)
 
 import argparse
+import hashlib
 import json
 import io
 import pickle
@@ -37,6 +38,24 @@ from PIL import Image
 import zmq
 from transformers import AutoProcessor
 from qwen_vla import Qwen3VLVLAModel, extend_position_ids_for_flare, split_slow_fast_embeds
+
+
+OFFICIAL_SINGLE_VIEW_PROFILE = "official_single_view"
+REVO3_FULL_CENTER_PROFILE = "revo3_full_center_v1"
+CAMERA_PROFILES = (OFFICIAL_SINGLE_VIEW_PROFILE, REVO3_FULL_CENTER_PROFILE)
+
+
+def _validated_camera_profile(args):
+    profile = str(getattr(args, "camera_profile", OFFICIAL_SINGLE_VIEW_PROFILE))
+    if profile not in CAMERA_PROFILES:
+        raise ValueError(f"unsupported camera_profile={profile!r}")
+    if profile == REVO3_FULL_CENTER_PROFILE:
+        if tuple(getattr(args, "image_size", ()) or ()) != (384, 288):
+            raise ValueError(
+                "revo3_full_center_v1 requires --image_size 384 288; refusing "
+                "to silently change the trained visual contract."
+            )
+    return profile
 
 
 def _normalize(values, mask, vmin, vmax):
@@ -85,6 +104,7 @@ def _build_qwen3vl_from_config(config_path, args):
         config             = text_config,
         action_dim         = args.action_dim,
         action_chunk       = args.action_chunk,
+        tactile_num_fingers= args.tactile_num_fingers,
         use_tactile_deform = bool(args.use_tactile_deform),
         use_robot_state    = bool(args.use_robot_state),
         image_token_id     = image_token_id,
@@ -146,6 +166,190 @@ def _has_hf_weights(path):
     return False
 
 
+def _load_policy_statistics(stats_path, args):
+    """Load exactly the normalization blocks required by this checkpoint.
+
+    Profile B is DIFF-only and its frozen MIDTRAIN_TRAIN artifact deliberately
+    contains no Force6D block.  Conversely, any checkpoint which consumes a
+    Force6D vector/history/code must fail closed when that block is absent.
+    """
+    with open(stats_path) as f:
+        stats_raw = json.load(f)
+    if not isinstance(stats_raw, dict) or not stats_raw:
+        raise ValueError("normalization statistics must contain a dataset block")
+    ds = (
+        args.dataset_name
+        if args.dataset_name and args.dataset_name in stats_raw
+        else next(iter(stats_raw))
+    )
+    block = stats_raw[ds]
+    if not isinstance(block, dict):
+        raise ValueError("normalization dataset block must be an object")
+
+    def _arr(key, sub):
+        try:
+            return np.array(block[key][sub])
+        except (KeyError, TypeError) as exc:
+            raise ValueError(
+                f"normalization statistics are missing required {key}.{sub}"
+            ) from exc
+
+    statistic = {
+        "action_mask": _arr("action", "mask"),
+        "action_min": _arr("action", "q01"),
+        "action_max": _arr("action", "q99"),
+    }
+    force_required = bool(
+        getattr(args, "use_tactile_vec", 0)
+        or getattr(args, "use_tactile_vqvae", 0)
+        or getattr(args, "use_tactile_code", 0)
+    )
+    if force_required:
+        statistic.update({
+            "tacf6_mask": _arr("tactile_f6", "mask"),
+            "tacf6_min": _arr("tactile_f6", "q01"),
+            "tacf6_max": _arr("tactile_f6", "q99"),
+        })
+        expected_tactile_dim = int(args.tactile_num_fingers) * 6
+        if any(np.asarray(statistic[key]).size != expected_tactile_dim for key in (
+            "tacf6_mask", "tacf6_min", "tacf6_max"
+        )):
+            raise ValueError(
+                "Checkpoint tactile statistics do not match "
+                f"tactile_num_fingers={args.tactile_num_fingers}; "
+                "implicit hand padding is forbidden"
+            )
+    if args.use_robot_state:
+        statistic["state_mask"] = _arr("state", "mask")
+        statistic["state_min"] = _arr("state", "q01")
+        statistic["state_max"] = _arr("state", "q99")
+    return statistic
+
+
+def _sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _build_nonproduction_server_identity(args, training_args, checkpoint_path, stats_path):
+    """Best-effort identity for the upstream single-view compatibility path.
+
+    This path is not accepted by the Revo production client.  It still emits
+    a server-owned checkpoint/config/statistics identity on every reply so a
+    diagnostic client never has to mistake request echoes for model identity.
+    """
+    files = {
+        "checkpoint_sha256": os.path.join(checkpoint_path, "model.pt"),
+        "model_config_sha256": os.path.join(checkpoint_path, "config.json"),
+        "training_args_sha256": os.path.join(checkpoint_path, "training_args.json"),
+        "normalization_statistics_sha256": stats_path,
+    }
+    identity = {
+        "schema_version": "trex-server-identity-nonproduction-v1",
+        **{
+            name: _sha256_file(path) if os.path.isfile(path) else "unavailable"
+            for name, path in files.items()
+        },
+        "checkpoint_lineage_sha256": "unavailable",
+        "normalization_artifact_sha256": "unavailable",
+        "checkpoint_family_id": str(training_args.get("checkpoint_family_id", "untracked")),
+        "normalization_family_id": str(training_args.get("normalization_family_id", "untracked")),
+        "tactile_profile": str(getattr(args, "tactile_profile", "legacy_force6d")),
+        "camera_profile": str(getattr(args, "camera_profile", OFFICIAL_SINGLE_VIEW_PROFILE)),
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    identity["identity_sha256"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return identity
+
+
+def _validate_revo_normalization_runtime(args, training_args, checkpoint_path, stats_path):
+    """Re-hash the frozen artifact inside the actual server process.
+
+    The launcher performs the same checks before spawning us; repeating them
+    here closes both direct-entrypoint bypass and mutation-between-check/use.
+    Artifact ``statistics_path`` is provenance only, so a byte-identical
+    bundle remains relocatable between the collection and GPU hosts.
+    """
+    if getattr(args, "camera_profile", OFFICIAL_SINGLE_VIEW_PROFILE) != REVO3_FULL_CENTER_PROFILE:
+        return
+    from revo3_v1.revo.contracts import JOINT_ORDER_HASH
+
+    artifact_path = str(getattr(args, "stats_artifact_path", "") or "")
+    if not artifact_path or not os.path.isfile(artifact_path):
+        raise FileNotFoundError(
+            "Revo3 serving requires --stats_artifact_path for frozen normalization"
+        )
+    with open(artifact_path, encoding="utf-8") as handle:
+        artifact = json.load(handle)
+    lineage_path = os.path.join(checkpoint_path, "checkpoint_lineage.json")
+    if not os.path.isfile(lineage_path):
+        raise FileNotFoundError("Revo3 serving requires checkpoint_lineage.json")
+    with open(lineage_path, encoding="utf-8") as handle:
+        lineage = json.load(handle)
+
+    stats_sha = _sha256_file(stats_path)
+    artifact_sha = _sha256_file(artifact_path)
+    checkpoint_sha = _sha256_file(os.path.join(checkpoint_path, "model.pt"))
+    expected_cli = {
+        "normalization_statistics_sha256": stats_sha,
+        "normalization_artifact_sha256": artifact_sha,
+    }
+    mismatches = {}
+    for key, expected in expected_cli.items():
+        observed = str(getattr(args, key, "") or "")
+        if observed != expected:
+            mismatches[f"cli.{key}"] = (expected, observed)
+        if training_args.get(key) != expected:
+            mismatches[f"training_args.{key}"] = (expected, training_args.get(key))
+        if lineage.get(key) != expected:
+            mismatches[f"lineage.{key}"] = (expected, lineage.get(key))
+    expected_artifact = {
+        "schema_version": "revo3-normalization-artifact-v1",
+        "statistics_sha256": stats_sha,
+        "source_split": "midtrain_train",
+        "split_manifest_sha256": training_args.get("split_manifest_sha256"),
+        "joint_order_hash": JOINT_ORDER_HASH,
+        "tactile_profile": training_args.get("tactile_profile"),
+        "checkpoint_family_id": training_args.get("checkpoint_family_id"),
+        "normalization_family_id": training_args.get("normalization_family_id"),
+        "capability_manifest_sha256": training_args.get("capability_manifest_sha256"),
+    }
+    for key, expected in expected_artifact.items():
+        if artifact.get(key) != expected:
+            mismatches[f"artifact.{key}"] = (expected, artifact.get(key))
+    if not isinstance(artifact.get("statistics_path"), str) or not artifact["statistics_path"]:
+        mismatches["artifact.statistics_path"] = ("non-empty provenance path", artifact.get("statistics_path"))
+    episode_ids = artifact.get("stats_episode_ids")
+    if not isinstance(episode_ids, list) or not episode_ids:
+        mismatches["artifact.stats_episode_ids"] = ("non-empty list", episode_ids)
+    expected_lineage = {
+        "schema_version": "revo3-checkpoint-lineage-v1",
+        "checkpoint_sha256": checkpoint_sha,
+        "split_manifest_sha256": training_args.get("split_manifest_sha256"),
+        "capability_manifest_sha256": training_args.get("capability_manifest_sha256"),
+        "tactile_profile": training_args.get("tactile_profile"),
+        "checkpoint_family_id": training_args.get("checkpoint_family_id"),
+        "normalization_family_id": training_args.get("normalization_family_id"),
+        "tactile_profile_manifest_sha256": training_args.get(
+            "tactile_profile_manifest_sha256"
+        ),
+        "joint_order_hash": JOINT_ORDER_HASH,
+        "camera_profile": REVO3_FULL_CENTER_PROFILE,
+        "view_slots": {"slow": "full", "fast": "fixed_center"},
+    }
+    for key, expected in expected_lineage.items():
+        if lineage.get(key) != expected:
+            mismatches[f"lineage.{key}"] = (expected, lineage.get(key))
+    stage = training_args.get("revo_training_stage")
+    if stage not in {"w0", "w1", "midtrain", "sft"} or lineage.get("stage") != stage:
+        mismatches["lineage.stage"] = (stage, lineage.get("stage"))
+    if mismatches:
+        raise ValueError(f"Revo3 frozen normalization lineage failed: {mismatches}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Model loading
 # ─────────────────────────────────────────────────────────────────────────────
@@ -158,7 +362,13 @@ def model_load(args):
     if os.path.exists(ta_path):
         with open(ta_path) as f:
             ta = json.load(f)
-        for key, default in [("tactile_intermediate_size", 0),
+        for key, default in [("action_dim", 31),
+                             ("action_chunk", 8),
+                             ("use_robot_state", 0),
+                             ("use_tactile_deform", 1),
+                             ("use_tactile_vec", 0),
+                             ("tactile_intermediate_size", 0),
+                             ("tactile_num_fingers", 10),
                              ("n_flare_tokens_per_frame", 0),
                              ("n_flare_steps", 0),
                              ("use_tactile_code", 0),
@@ -168,13 +378,46 @@ def model_load(args):
                              ("cascaded_split_step", 6)]:
             saved = ta.get(key, default)
             cli_val = getattr(args, key, default)
-            if saved and cli_val == default:
+            if key in ta and cli_val == default:
                 setattr(args, key, saved)
                 print(f"Auto-detected {key}={saved} from training_args.json")
         # vqvae_config is a dict — restore it verbatim so the embedded VQ-VAE
         # submodule is rebuilt with the right architecture before weights load.
         if ta.get("vqvae_config") is not None and getattr(args, "vqvae_config", None) is None:
             args.vqvae_config = ta["vqvae_config"]
+
+    stats_path = args.stats_path or ""
+    if not stats_path:
+        candidate = os.path.join(ckpt, "stats_data.json")
+        if os.path.exists(candidate):
+            stats_path = candidate
+    if not stats_path or not os.path.exists(stats_path):
+        raise FileNotFoundError("Cannot find stats JSON.")
+    _validate_revo_normalization_runtime(args, ta, ckpt, stats_path)
+    if _validated_camera_profile(args) == REVO3_FULL_CENTER_PROFILE:
+        from revo3_v1.policy.server_identity import build_revo_server_identity
+        from revo3_v1.revo.contracts import JOINT_ORDER_HASH
+
+        args._server_identity = build_revo_server_identity(
+            checkpoint_path=ckpt,
+            normalization_statistics_path=stats_path,
+            normalization_artifact_path=args.stats_artifact_path,
+            model_config_path=(
+                os.path.join(str(args.base_model_path), "config.json")
+                if (
+                    os.path.isdir(str(args.base_model_path))
+                    and _has_hf_weights(str(args.base_model_path))
+                )
+                else os.path.join(ckpt, "config.json")
+            ),
+            camera_profile=REVO3_FULL_CENTER_PROFILE,
+            tactile_profile=str(args.tactile_profile),
+            joint_order_hash=JOINT_ORDER_HASH,
+        ).as_mapping()
+    else:
+        args._server_identity = _build_nonproduction_server_identity(
+            args, ta, ckpt, stats_path
+        )
 
     tac_isize = args.tactile_intermediate_size if args.tactile_intermediate_size > 0 else None
     n_flare_tpf = getattr(args, "n_flare_tokens_per_frame", 0)
@@ -193,6 +436,7 @@ def model_load(args):
         model = Qwen3VLVLAModel.from_pretrained_qwen3vl(
             pretrained_path=base_model_path,
             action_dim=args.action_dim, action_chunk=args.action_chunk,
+            tactile_num_fingers=args.tactile_num_fingers,
             use_tactile_deform=bool(args.use_tactile_deform),
             use_robot_state=bool(args.use_robot_state),
             torch_dtype=torch.bfloat16,
@@ -217,6 +461,7 @@ def model_load(args):
         model = Qwen3VLVLAModel.from_pretrained_qwen3vl(
             pretrained_path=pretrained_path,
             action_dim=args.action_dim, action_chunk=args.action_chunk,
+            tactile_num_fingers=args.tactile_num_fingers,
             use_tactile_deform=bool(args.use_tactile_deform),
             use_robot_state=bool(args.use_robot_state),
             torch_dtype=torch.bfloat16,
@@ -232,6 +477,12 @@ def model_load(args):
     ckpt_file = os.path.join(ckpt, "model.pt")
     sd = torch.load(ckpt_file, map_location="cpu")
     missing, unexpected = model.load_state_dict(sd, strict=False)
+    if getattr(args, "camera_profile", OFFICIAL_SINGLE_VIEW_PROFILE) == REVO3_FULL_CENTER_PROFILE:
+        if missing or unexpected:
+            raise RuntimeError(
+                "Revo3 migrated checkpoint must load exactly; "
+                f"missing={missing[:10]}, unexpected={unexpected[:10]}"
+            )
     print(f"Checkpoint loaded: missing={len(missing)}, unexpected={len(unexpected)}")
     if missing:
         print(f"  missing (first 10): {missing[:10]}")
@@ -249,34 +500,7 @@ def model_load(args):
     if n_flare_total > 0:
         print(f"Flare prediction: {n_flare_steps} steps × {n_flare_tpf} tok/frame = {n_flare_total} total tokens")
 
-    stats_path = args.stats_path or ""
-    if not stats_path:
-        candidate = os.path.join(ckpt, "stats_data.json")
-        if os.path.exists(candidate):
-            stats_path = candidate
-    if not stats_path or not os.path.exists(stats_path):
-        raise FileNotFoundError("Cannot find stats JSON.")
-
-    with open(stats_path) as f:
-        stats_raw = json.load(f)
-    ds = args.dataset_name if args.dataset_name and args.dataset_name in stats_raw \
-         else next(iter(stats_raw))
-
-    def _arr(key, sub):
-        return np.array(stats_raw[ds][key][sub])
-
-    statistic = {
-        "action_mask": _arr("action", "mask"),
-        "action_min":  _arr("action", "q01"),
-        "action_max":  _arr("action", "q99"),
-        "tacf6_mask":  _arr("tactile_f6", "mask"),
-        "tacf6_min":   _arr("tactile_f6", "q01"),
-        "tacf6_max":   _arr("tactile_f6", "q99"),
-    }
-    if args.use_robot_state:
-        statistic["state_mask"] = _arr("state", "mask")
-        statistic["state_min"]  = _arr("state", "q01")
-        statistic["state_max"]  = _arr("state", "q99")
+    statistic = _load_policy_statistics(stats_path, args)
 
     return model, processor, statistic
 
@@ -346,11 +570,22 @@ class CascadedServer:
 
     def __init__(self, args, model, processor, statistic):
         self.args      = args
+        self.tactile_num_fingers = int(args.tactile_num_fingers)
         self.model     = model
         self.processor = processor
         self.statistic = statistic
         self.device    = f"cuda:{args.cuda}"
         self.lock      = threading.Lock()
+        self.camera_profile = _validated_camera_profile(args)
+        self.tactile_profile = str(getattr(args, "tactile_profile", "legacy_force6d"))
+        self.cached_request_identity = None
+        self.cached_observation_timestamp_ns = None
+        server_identity = getattr(args, "_server_identity", None)
+        if not isinstance(server_identity, dict) or not server_identity:
+            raise ValueError("model_load must establish server-owned identity before serving")
+        # Never update this object from a request.  A fresh copy is returned
+        # in every reply so callers cannot mutate the server's pinned value.
+        self.server_identity = dict(server_identity)
 
         # Ablation: when True, skip the cascaded split entirely and let the
         # action expert integrate the full τ ∈ [0, 1] flow alone.  The tactile
@@ -381,15 +616,26 @@ class CascadedServer:
         self.vqvae_model    = None
         self.vqvae_stats    = None
         self.vqvae_window   = 16
-        self.f6_buffer: list = []                  # list of [10, 6] np arrays
+        self.f6_buffer: list = []                  # list of [F, 6] np arrays
         self.use_embedded_vqvae = bool(
             getattr(model, "use_tactile_vqvae", False)
             and getattr(model, "tactile_vqvae", None) is not None)
         if self.use_embedded_vqvae:
+            if str(getattr(args, "vqvae_mode", "embedded")) != "embedded":
+                raise RuntimeError(
+                    "checkpoint contains an embedded VQ-VAE but server vqvae_mode is not embedded"
+                )
             self.vqvae_window = int(model.tactile_vqvae.cfg.window)
             print(f">>> embedded VQ-VAE in model — F6 encoded on-the-fly "
                   f"(K={model.tactile_vqvae.cfg.codebook_size}, W={self.vqvae_window})")
         elif bool(getattr(args, "use_tactile_code", 0)):
+            if str(getattr(args, "vqvae_mode", "embedded")) != "external":
+                raise RuntimeError(
+                    "tactile codes requested but checkpoint has no embedded VQ-VAE; "
+                    "an explicit external mode plus --vqvae_ckpt is required"
+                )
+            if not str(getattr(args, "vqvae_ckpt", "")):
+                raise RuntimeError("external VQ-VAE mode requires --vqvae_ckpt")
             from tactile_vqvae.models.tactile_vqvae import (
                 TactileVQVAE, TactileVQVAEConfig)
             from tactile_vqvae.data.stats import TacF6Stats
@@ -418,7 +664,7 @@ class CascadedServer:
                 head = np.repeat(arr[:1], w - arr.shape[0], axis=0)
                 arr = np.concatenate([head, arr], axis=0)
         else:
-            f6 = arr.reshape(10, 6)
+            f6 = arr.reshape(self.tactile_num_fingers, 6)
             self.f6_buffer.append(f6)
             if len(self.f6_buffer) > w:
                 self.f6_buffer = self.f6_buffer[-w:]
@@ -462,13 +708,19 @@ class CascadedServer:
         is_per_finger = getattr(self.vqvae_model.cfg, "granularity", "hand") == "finger"
         n_fingers = int(getattr(self.vqvae_model.cfg, "n_fingers", 5)) if is_per_finger else 1
 
+        if self.tactile_num_fingers % n_fingers:
+            raise ValueError(
+                f"tactile_num_fingers={self.tactile_num_fingers} is not divisible "
+                f"by VQ-VAE n_fingers={n_fingers}"
+            )
+        n_groups = self.tactile_num_fingers // n_fingers
         if is_per_finger:
-            codes = np.zeros((2, n_fingers), dtype=np.int64)     # [2, 5]
+            codes = np.zeros((n_groups, n_fingers), dtype=np.int64)
         else:
-            codes = np.zeros(2, dtype=np.int64)                  # [2]
+            codes = np.zeros(n_groups, dtype=np.int64)
 
-        for hand in (0, 1):
-            wh = arr_n[:, hand * 5: (hand + 1) * 5, :]           # [W, 5, 6]
+        for hand in range(n_groups):
+            wh = arr_n[:, hand * n_fingers: (hand + 1) * n_fingers, :]
             t = torch.from_numpy(wh).unsqueeze(0).to(self.device)
             with torch.no_grad():
                 idx = self.vqvae_model.encode(t).cpu().numpy()   # [1] or [1, 5]
@@ -663,6 +915,111 @@ class CascadedServer:
         """Top-level dispatch.  Returns dict suitable for pickling back to
         the client.  Any exception inside a mode's body is propagated to the
         caller, which logs and replies with status='error'."""
+        if mode == "identity":
+            return {
+                "status": "success",
+                "mode": "identity",
+                "server_identity": dict(self.server_identity),
+            }
+        payload_profile = payload.get("camera_profile", OFFICIAL_SINGLE_VIEW_PROFILE)
+        if payload_profile != self.camera_profile:
+            raise ValueError(
+                f"request camera_profile={payload_profile!r} does not match "
+                f"server camera_profile={self.camera_profile!r}"
+            )
+        strict_revo = self.camera_profile == REVO3_FULL_CENTER_PROFILE
+        identity = None
+        if strict_revo:
+            payload_tactile_profile = str(payload.get("tactile_profile", ""))
+            if payload_tactile_profile != self.tactile_profile:
+                raise ValueError(
+                    "Revo3 request tactile_profile does not match server checkpoint profile"
+                )
+            identity_names = (
+                "task_id", "task_version", "instruction_hash", "lease_id",
+                "version_fingerprint",
+            )
+            missing_identity = [name for name in identity_names if payload.get(name) in (None, "")]
+            if missing_identity:
+                raise ValueError(f"Revo3 request missing identity fields: {missing_identity}")
+            identity = tuple(payload[name] for name in identity_names)
+            observation_timestamp_ns = payload.get("observation_timestamp_ns")
+            request_sent_at_ns = payload.get("request_sent_at_ns")
+            lease_expires_at_ns = payload.get("lease_expires_at_ns")
+            for name, value in (
+                ("observation_timestamp_ns", observation_timestamp_ns),
+                ("request_sent_at_ns", request_sent_at_ns),
+                ("lease_expires_at_ns", lease_expires_at_ns),
+            ):
+                if not isinstance(value, (int, np.integer)) or value < 0:
+                    raise ValueError(f"Revo3 request requires non-negative integer {name}")
+            if not observation_timestamp_ns <= request_sent_at_ns < lease_expires_at_ns:
+                raise ValueError("Revo3 observation/request/lease timestamps are inconsistent")
+            requires_force = self.tactile_profile in {
+                "profile_a_force6d_diff", "ablation_force6d_only"
+            }
+            if requires_force:
+                history = np.asarray(payload.get("tactile_f6_history"), dtype=np.float32)
+                history_ts = np.asarray(
+                    payload.get("tactile_f6_history_timestamps_ns"), dtype=np.int64
+                )
+                history_seq = np.asarray(
+                    payload.get("tactile_f6_history_sequences"), dtype=np.int64
+                )
+                expected_history = (16, self.tactile_num_fingers, 6)
+                if history.shape != expected_history or not np.isfinite(history).all():
+                    raise ValueError(f"Revo3 tactile history must be finite {expected_history}")
+                if history_ts.shape != (16,) or history_seq.shape != (16,):
+                    raise ValueError("Revo3 tactile history timestamps/sequences must be [16]")
+                if np.any(np.diff(history_ts) <= 0) or np.any(np.diff(history_seq) <= 0):
+                    raise ValueError("Revo3 tactile history timestamps/sequences must be strictly increasing")
+                if history_ts[-1] != payload.get("tactile_timestamp_ns"):
+                    raise ValueError("Revo3 tactile history latest timestamp mismatch")
+                current_f6 = np.asarray(payload.get("tactile_f6"), dtype=np.float32)
+                if current_f6.shape != (self.tactile_num_fingers, 6) or not np.array_equal(
+                    history[-1], current_f6
+                ):
+                    raise ValueError("Revo3 tactile history latest value must equal tactile_f6")
+            elif any(
+                name in payload for name in (
+                    "tactile_f6", "tactile_f6_history",
+                    "tactile_f6_history_timestamps_ns", "tactile_f6_history_sequences",
+                )
+            ):
+                raise ValueError("profile_b_diff_only forbids Force6D payload fields")
+            if self.tactile_profile in {"profile_a_force6d_diff", "profile_b_diff_only"}:
+                deform = np.asarray(payload.get("tactile_deform"))
+                deform_ts = np.asarray(payload.get("tactile_deform_timestamp_ns"))
+                if deform.shape != (5, 240, 240) or deform_ts.shape != (5,):
+                    raise ValueError("Revo3 current DIFF must be [5,240,240] with [5] timestamps")
+                if deform.dtype != np.uint8:
+                    raise ValueError("Revo3 current DIFF payload must be uint8")
+                diff_age_ns = observation_timestamp_ns - deform_ts.astype(np.int64)
+                if np.any(diff_age_ns < 0):
+                    raise ValueError("Revo3 current DIFF payload contains future samples")
+                if np.any(diff_age_ns > 150_000_000):
+                    raise ValueError("Revo3 current DIFF payload is stale")
+            if mode == "fast":
+                if self.cached_request_identity is None or identity != self.cached_request_identity:
+                    raise ValueError("fast request identity does not match cached slow task")
+                if payload.get("chunk_id") != self.chunk_id:
+                    raise ValueError("fast request chunk_id does not match cached slow chunk")
+                if observation_timestamp_ns < self.cached_observation_timestamp_ns:
+                    raise ValueError("fast request observation timestamp regressed")
+        if self.camera_profile == REVO3_FULL_CENTER_PROFILE and mode != "fast":
+            if "image_head" not in payload or "image_wrist_right" not in payload:
+                raise ValueError(
+                    "revo3_full_center_v1 requires image_head=full and "
+                    "image_wrist_right=fixed_center on every slow request"
+                )
+            if "image_wrist_left" in payload:
+                raise ValueError("Revo3 single-camera profile forbids a third image slot")
+            if tuple(payload.get("image_view_names", ())) != ("full", "fixed_center"):
+                raise ValueError("Revo3 request is missing the frozen dual-view mapping")
+            capture_timestamp_ns = payload.get("capture_timestamp_ns")
+            if not isinstance(capture_timestamp_ns, (int, np.integer)) or capture_timestamp_ns < 0:
+                raise ValueError("Revo3 dual views require one valid capture timestamp")
+
         slow_img = (Image.open(io.BytesIO(payload["image_head"])).convert("RGB")
                     if "image_head" in payload else None)
         fast_list = []
@@ -671,7 +1028,11 @@ class CascadedServer:
         if "image_wrist_left" in payload:
             fast_list.append(Image.open(io.BytesIO(payload["image_wrist_left"])).convert("RGB"))
 
-        tac_f6     = payload.get("tactile_f6")
+        tac_f6 = (
+            payload.get("tactile_f6_history")
+            if strict_revo and self.tactile_profile != "profile_b_diff_only"
+            else payload.get("tactile_f6")
+        )
         tac_deform = payload.get("tactile_deform", payload.get("tactile_image_deform"))
         state_fast = payload.get("state_fast")
         task_desc  = payload.get("task_description", "")
@@ -679,6 +1040,7 @@ class CascadedServer:
         with self.lock, torch.inference_mode():
             self.model = self.model.to(self.device).eval()
             t0 = time.time()
+            inference_started_ns = time.perf_counter_ns()
             if mode == "slow":
                 if slow_img is None:
                     raise ValueError("slow request requires image_head")
@@ -686,13 +1048,18 @@ class CascadedServer:
                     task_desc, [slow_img], fast_list,
                     tac_f6, tac_deform, state_fast)
                 latency_ms = (time.time() - t0) * 1000.0
-                return {"status": "success", "mode": "slow",
+                if strict_revo:
+                    self.cached_request_identity = identity
+                    self.cached_observation_timestamp_ns = observation_timestamp_ns
+                result = {"status": "success", "mode": "slow",
                         "actions": actions, "chunk_id": cid,
                         "latency_ms": latency_ms}
             elif mode == "fast":
                 actions, cid = self._run_fast(tac_f6, tac_deform)
                 latency_ms = (time.time() - t0) * 1000.0
-                return {"status": "success", "mode": "fast",
+                if strict_revo:
+                    self.cached_observation_timestamp_ns = observation_timestamp_ns
+                result = {"status": "success", "mode": "fast",
                         "actions": actions, "chunk_id": cid,
                         "latency_ms": latency_ms}
             elif mode == "slow_and_fast":
@@ -702,11 +1069,34 @@ class CascadedServer:
                                tac_f6, tac_deform, state_fast)
                 actions, cid = self._run_fast(tac_f6, tac_deform)
                 latency_ms = (time.time() - t0) * 1000.0
-                return {"status": "success", "mode": "slow_and_fast",
+                if strict_revo:
+                    self.cached_request_identity = identity
+                    self.cached_observation_timestamp_ns = observation_timestamp_ns
+                result = {"status": "success", "mode": "slow_and_fast",
                         "actions": actions, "chunk_id": cid,
                         "latency_ms": latency_ms}
             else:
                 raise ValueError(f"unknown mode: {mode}")
+            if strict_revo:
+                # Server and controller monotonic clocks are unrelated across
+                # hosts.  Express production time in the client's declared
+                # clock domain by adding only the server-measured duration to
+                # request_sent_at_ns.  The client can then reject stale/future
+                # responses without comparing two arbitrary monotonic epochs.
+                produced_at_ns = int(request_sent_at_ns) + (
+                    time.perf_counter_ns() - inference_started_ns
+                )
+                result.update({
+                    "task_id": payload["task_id"],
+                    "task_version": payload["task_version"],
+                    "instruction_hash": payload["instruction_hash"],
+                    "lease_id": payload["lease_id"],
+                    "version_fingerprint": payload["version_fingerprint"],
+                    "observation_timestamp_ns": payload["observation_timestamp_ns"],
+                    "produced_at_ns": produced_at_ns,
+                })
+            result["server_identity"] = dict(self.server_identity)
+            return result
 
 
 def main(args):
@@ -714,14 +1104,15 @@ def main(args):
     model, processor, statistic = model_load(args)
     print("Model loaded successfully!")
 
+    camera_profile = _validated_camera_profile(args)
     # Warm-up (use 2 fast images for bimanual / dual-arm tasks)
     print("Warming up model...")
     dummy_slow  = [Image.new("RGB", (224, 224), color="black")]
     n_fast_cams = 2 if args.action_dim > 31 else 1
     dummy_fast  = [Image.new("RGB", (224, 224), color="black") for _ in range(n_fast_cams)]
     dummy_state = np.zeros(args.action_dim, dtype=np.float32) if args.use_robot_state else None
-    dummy_f6    = np.zeros((5, 6), dtype=np.float32) if args.use_tactile_vec else None
-    dummy_deform = np.zeros((5, 240, 240), dtype=np.float32) if args.use_tactile_deform else None
+    dummy_f6    = np.zeros((args.tactile_num_fingers, 6), dtype=np.float32) if args.use_tactile_vec else None
+    dummy_deform = np.zeros((args.tactile_num_fingers, 240, 240), dtype=np.float32) if args.use_tactile_deform else None
 
     server = CascadedServer(args, model, processor, statistic)
     # Warm-up: run one slow_and_fast and discard
@@ -733,12 +1124,58 @@ def main(args):
         "tactile_deform":     dummy_deform,
         "state_fast":         dummy_state,
     }
-    if len(dummy_fast) > 1:
+    if camera_profile == REVO3_FULL_CENTER_PROFILE:
+        warm_now = time.monotonic_ns()
+        warm_history_ts = np.arange(warm_now - 15, warm_now + 1, dtype=np.int64)
+        warm_f6 = (
+            dummy_f6
+            if dummy_f6 is not None
+            else np.zeros((args.tactile_num_fingers, 6), dtype=np.float32)
+        )
+        dummy_payload.update({
+            "camera_profile": REVO3_FULL_CENTER_PROFILE,
+            "capture_timestamp_ns": 0,
+            "image_view_names": ("full", "fixed_center"),
+            "task_id": "warmup",
+            "task_version": 1,
+            "instruction_hash": "warmup-sha256",
+            "lease_id": "warmup-lease",
+            "version_fingerprint": "warmup-version",
+            "observation_timestamp_ns": warm_now,
+            "state_timestamp_ns": warm_now,
+            "rgb_timestamp_ns": warm_now,
+            "tactile_timestamp_ns": warm_now,
+            "request_sent_at_ns": warm_now,
+            "lease_expires_at_ns": warm_now + 10_000_000_000,
+            "tactile_profile": args.tactile_profile,
+        })
+        if args.tactile_profile != "profile_b_diff_only":
+            dummy_payload.update({
+                "tactile_f6": warm_f6,
+                "tactile_f6_history": np.repeat(warm_f6[None, ...], 16, axis=0),
+                "tactile_f6_history_timestamps_ns": warm_history_ts,
+                "tactile_f6_history_sequences": np.arange(16, dtype=np.int64),
+            })
+        else:
+            dummy_payload.pop("tactile_f6", None)
+        if bool(args.use_tactile_deform):
+            dummy_payload.update({
+                "tactile_deform": dummy_deform.astype(np.uint8),
+                "tactile_deform_timestamp_ns": np.full(5, warm_now, dtype=np.int64),
+            })
+    elif len(dummy_fast) > 1:
         dummy_payload["image_wrist_left"] = _pil_to_bytes(dummy_fast[1])
     result = server.predict("slow_and_fast", dummy_payload)
     print(f"Warm-up output shape: "
           f"{np.array(result['actions']).shape}, "
           f"latency {result['latency_ms']:.1f} ms")
+
+    # A bounded model-loading/inference gate for CI and remote GPU bring-up.
+    # This intentionally exercises the same model_load + CascadedServer path as
+    # production serving, then exits before opening a network listener.
+    if bool(getattr(args, "smoke_only", 0)):
+        print("Smoke-only inference completed; ZMQ listener was not started.")
+        return result
 
     # ZMQ Server
     context = zmq.Context()
@@ -749,30 +1186,43 @@ def main(args):
 
     step_counter = 0
     n_slow = n_fast = 0
-    while True:
-        try:
-            payload = pickle.loads(socket.recv())
+    try:
+        while True:
+            try:
+                payload = pickle.loads(socket.recv())
 
-            # Default to slow_and_fast for first request; clients can override
-            # with mode='slow' or mode='fast'.
-            mode = payload.get("mode", "slow_and_fast")
-            result = server.predict(mode, payload)
-            if mode == "fast":
-                n_fast += 1
-            else:
-                n_slow += 1
+                # Default to slow_and_fast for first request; clients can override
+                # with mode='slow' or mode='fast'.
+                mode = payload.get("mode", "slow_and_fast")
+                result = server.predict(mode, payload)
+                if mode == "fast":
+                    n_fast += 1
+                else:
+                    n_slow += 1
 
-            socket.send(pickle.dumps(result))
-            step_counter += 1
-            if step_counter % 10 == 0:
-                print(f"Processed {step_counter} requests "
-                      f"(slow={n_slow}, fast={n_fast}, "
-                      f"chunk_id={server.chunk_id}). "
-                      f"Task: {payload.get('task_description', '')}")
+                socket.send(pickle.dumps(result))
+                step_counter += 1
+                if step_counter % 10 == 0:
+                    print(f"Processed {step_counter} requests "
+                          f"(slow={n_slow}, fast={n_fast}, "
+                          f"chunk_id={server.chunk_id}). "
+                          f"Task: {payload.get('task_description', '')}")
+                max_requests = int(getattr(args, "max_requests", 0))
+                if max_requests > 0 and step_counter >= max_requests:
+                    print(f"Reached max_requests={max_requests}; shutting down cleanly.")
+                    break
 
-        except Exception as e:
-            traceback.print_exc()
-            socket.send(pickle.dumps({"status": "error", "message": str(e)}))
+            except Exception as e:
+                traceback.print_exc()
+                socket.send(pickle.dumps({
+                    "status": "error",
+                    "message": str(e),
+                    "server_identity": dict(server.server_identity),
+                }))
+    finally:
+        socket.close(linger=0)
+        context.term()
+    return result
 
 
 def _pil_to_bytes(img: Image.Image) -> bytes:
@@ -781,17 +1231,29 @@ def _pil_to_bytes(img: Image.Image) -> bytes:
     return buf.getvalue()
 
 
-if __name__ == "__main__":
+def build_server_argument_parser():
     parser = argparse.ArgumentParser(description="Real-world ZMQ server (with flare prediction)")
     parser.add_argument("--checkpoint_path", type=str, required=True)
     parser.add_argument("--base_model_path", type=str, default="")
     parser.add_argument("--stats_path", type=str, default="")
+    parser.add_argument("--stats_artifact_path", type=str, default="")
+    parser.add_argument("--normalization_statistics_sha256", type=str, default="")
+    parser.add_argument("--normalization_artifact_sha256", type=str, default="")
     parser.add_argument("--dataset_name", type=str, default="")
     parser.add_argument("--action_dim", type=int, default=31)
     parser.add_argument("--action_chunk", type=int, default=8)
+    parser.add_argument(
+        "--tactile_num_fingers", type=int, default=10,
+        help="Number of tactile feature streams; set 5 for a Revo3 single hand.",
+    )
     parser.add_argument("--use_robot_state", type=int, default=0)
     parser.add_argument("--use_tactile_deform", type=int, default=1)
     parser.add_argument("--use_tactile_vec", type=int, default=0)
+    parser.add_argument(
+        "--tactile_profile",
+        choices=("legacy_force6d", "profile_a_force6d_diff", "profile_b_diff_only", "ablation_force6d_only"),
+        default="legacy_force6d",
+    )
     parser.add_argument("--tactile_intermediate_size", type=int, default=0)
     parser.add_argument("--n_flare_tokens_per_frame", type=int, default=0,
                         help="0 = auto-detect from training_args.json")
@@ -800,6 +1262,22 @@ if __name__ == "__main__":
     parser.add_argument("--cuda", type=str, default="0")
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--image_size", type=int, nargs=2, default=None, metavar=("W", "H"))
+    parser.add_argument(
+        "--camera_profile",
+        choices=CAMERA_PROFILES,
+        default=OFFICIAL_SINGLE_VIEW_PROFILE,
+        help="Explicit visual slot contract. Revo3 maps one capture to "
+             "image_head=full and image_wrist_right=fixed_center.",
+    )
+    parser.add_argument(
+        "--smoke_only", type=int, choices=(0, 1), default=0,
+        help="Run the production model-load and one slow+fast warm-up, then exit "
+             "before binding a ZMQ port.",
+    )
+    parser.add_argument(
+        "--max_requests", type=int, default=0,
+        help="Exit cleanly after this many successful ZMQ requests; 0 serves forever.",
+    )
 
     # Cascaded flow matching schedule (auto-detected from training_args.json
     # when available).  The client sends payloads with mode='slow' once per
@@ -818,10 +1296,9 @@ if __name__ == "__main__":
                              "tactile-expert contribution at test time.")
 
     # VQ-VAE tactile code tokens (fast-path only).  When 0 (default) the model
-    # graph and behavior are identical to the pre-feature version — flip the
-    # flag to revert.  When 1, --vqvae_ckpt must be a TactileVQVAE latest.pt.
-    # Server maintains a rolling 16-frame F6 buffer and encodes per-hand on
-    # each fast tick.
+    # graph and behavior are identical to the pre-feature version.  Revo
+    # checkpoints carry the VQ-VAE inside model.pt; a standalone checkpoint is
+    # required only for the explicitly selected legacy external mode.
     parser.add_argument("--use_tactile_code", type=int, default=0,
                         help="1: server-side VQ-VAE encodes a rolling F6 "
                              "window into 2 codes per fast tick.")
@@ -829,10 +1306,21 @@ if __name__ == "__main__":
                         help="Codebook size of the VQ-VAE that produces the codes.")
     parser.add_argument("--vqvae_ckpt", type=str, default="",
                         help="Path to TactileVQVAE checkpoint (latest.pt). "
-                             "Required when --use_tactile_code 1.")
+                             "Required only with --vqvae_mode external.")
+    parser.add_argument(
+        "--vqvae_mode",
+        choices=("embedded", "external"),
+        default="embedded",
+        help="Revo checkpoints use embedded; external is a legacy explicit adapter.",
+    )
 
+    return parser
+
+
+if __name__ == "__main__":
+    parser = build_server_argument_parser()
     args = parser.parse_args()
-    if bool(args.use_tactile_code) and not args.vqvae_ckpt:
-        parser.error("--vqvae_ckpt must be set when --use_tactile_code 1")
+    if bool(args.use_tactile_code) and args.vqvae_mode == "external" and not args.vqvae_ckpt:
+        parser.error("--vqvae_ckpt must be set when --vqvae_mode external")
     main(args)
 

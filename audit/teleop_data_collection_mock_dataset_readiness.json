@@ -1,0 +1,61 @@
+{
+  "dataset_id": "revo3-teleop-four-task-synthetic-fixture",
+  "dataset_version": "git:15195b5;run:20260817",
+  "source_environment": "Revo3TianjiSyntheticCollection",
+  "target_environment": "Revo3TianjiSyntheticCollection",
+  "robot": "Revo3-single-hand-21DoF-mock-with-Tianji-context",
+  "action": {
+    "label_source": "controller_target",
+    "execution_boundary": "TeleopRevoWriter awaited RevoCommandPipeline write -> CommandReceipt.exact_sent_target -> 30Hz causal anchor",
+    "units": "radians; synthetic values not validated against physical limits",
+    "joint_order": [
+      "little_MPR", "little_MCP", "little_PIP", "little_DIP",
+      "ring_MPR", "ring_MCP", "ring_PIP", "ring_DIP",
+      "middle_MPR", "middle_MCP", "middle_PIP", "middle_DIP",
+      "index_MPR", "index_MCP", "index_PIP", "index_DIP",
+      "thumb_MCP", "thumb_PIP", "thumb_DIP", "thumb_CMP", "thumb_CMR"
+    ],
+    "action_dim": 21,
+    "normalization": "none; deterministic synthetic fixture",
+    "lookahead": 0
+  },
+  "timing": {
+    "timestamps_monotonic": true,
+    "episode_boundaries_verified": true,
+    "observation_action_alignment_verified": true
+  },
+  "cameras": [
+    {
+      "key": "full",
+      "resolution": "64x48",
+      "frames_expected": 16,
+      "frames_observed": 16,
+      "video_path": "outputs/teleop_audit_mock_20260817_final/derived/revo3_vla/*/rgb/frame_*.png (generated; not committed)",
+      "slot_mapping_verified": true
+    }
+  ],
+  "training_episode_ids": ["mock_bottle_00", "mock_phone_01", "mock_plastic_bag_02", "mock_refrigerator_door_03"],
+  "evaluation_replay_episode_ids": ["mock_bottle_00", "mock_phone_01", "mock_plastic_bag_02", "mock_refrigerator_door_03"],
+  "fixed_sample_benchmark": true,
+  "video_label_audit": {
+    "sampled_episodes": 4,
+    "labels_match": true,
+    "evidence_path": "audit/teleop_data_collection_video_label_audit.md"
+  },
+  "replay": {
+    "expert_success_rate": 0.0,
+    "label_replay_success_rate": 0.0,
+    "episodes": 4,
+    "artifact_path": "audit/teleop_data_collection_mock_audit.json"
+  },
+  "frame_cache": {
+    "enabled": false,
+    "cache_key": "",
+    "source_identity_verified": false
+  },
+  "scope": "synthetic serialization and causal-plumbing fixture only",
+  "training_approved": false,
+  "task_success_defined": false,
+  "mock_serialization_replay_exact_match_rate": 1.0,
+  "replay_metric_note": "Task success is undefined, so schema-required task-success rates are conservatively zero. The separate 16/16 exact controller-target serialization result is not a task-success metric."
+}

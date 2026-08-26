@@ -1,0 +1,39 @@
+[project]
+name = "revo3-teleop-data-collection"
+version = "0.1.0"
+description = "Native-rate, causally aligned Tianji/Revo3/glove/EMG data collection"
+requires-python = "==3.10.*"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "numpy>=1.26,<3",
+    "h5py>=3.11,<4",
+    "pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+camera = ["opencv-python-headless>=4.10,<5"]
+brainco = ["bc-revo3-sdk==1.5.1", "bc-edu-sdk==0.5.0"]
+visiontouch = [
+    "pyvitaisdk4bc @ https://focus-resource.oss-cn-beijing.aliyuncs.com/universal/bc-stark-sdk/libs/vts/pyvitaisdk4bc-1.0.10-py3-none-win_amd64.whl#sha256=0a196bc3e0cf49ad5a79558a016e5aed22bae481ce25c88842cb98757708009d ; sys_platform == 'win32' and platform_machine == 'AMD64'",
+    "pyvitaisdk4bc @ https://focus-resource.oss-cn-beijing.aliyuncs.com/universal/bc-stark-sdk/libs/vts/pyvitaisdk4bc-1.0.10-py3-none-linux_x86_64.whl#sha256=29bcaa5f9e046d7066e3e3d6f15a117bfb83b3cd726c081bd17158bc54cc3268 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "pyvitaisdk4bc @ https://focus-resource.oss-cn-beijing.aliyuncs.com/universal/bc-stark-sdk/libs/vts/pyvitaisdk4bc-1.0.10-py3-none-linux_aarch64.whl#sha256=9a489a081d94dbcbd988f1c6b8bb35d2c1b992ce0c254e8bc3985c6cc6463970 ; sys_platform == 'linux' and (platform_machine == 'aarch64' or platform_machine == 'arm64')",
+    "pyvitaisdk4bc @ https://focus-resource.oss-cn-beijing.aliyuncs.com/universal/bc-stark-sdk/libs/vts/pyvitaisdk4bc-1.0.10-py3-none-macosx_11_0_arm64.whl#sha256=f947b0c6bdb777dfb6fa9178513ec230f72253316b2ed0eedee1d54bb2c3e1b4 ; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+
+[project.scripts]
+revo3-teleop-mock = "revo3_teleop.cli.mock_demo:main"
+revo3-teleop-hardware-dry-run = "revo3_teleop.cli.hardware_dry_run:main"
+revo3-hardware-probe = "revo3_teleop.cli.hardware_probe:main"
+revo3-hardware-collect = "revo3_teleop.cli.collect_hardware:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", ".."]
+testpaths = ["tests"]

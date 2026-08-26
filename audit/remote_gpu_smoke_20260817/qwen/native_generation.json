@@ -1,0 +1,41 @@
+{
+  "schema_version": "revo3-qwen-gpu-smoke-v1",
+  "verification_scope": "single model load and deterministic generation",
+  "model_id": "/root/autodl-tmp/revo3_trex_qwen_smoke_20260817/models/qwen3-vl-2b-instruct_89644892",
+  "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+  "image_source": "generated_synthetic_bottle_fixture",
+  "emg_action": "CLOSE",
+  "generation_succeeded": true,
+  "planner_schema_valid": false,
+  "task_success_defined": false,
+  "claims_excluded": [
+    "object-grounding accuracy",
+    "robot task success",
+    "latency certification",
+    "clinical performance"
+  ],
+  "cuda_before": {
+    "available": true,
+    "device": 0,
+    "name": "NVIDIA GeForce RTX 4080 SUPER",
+    "free_bytes": 33526841344,
+    "total_bytes": 33796456448,
+    "allocated_bytes": 0,
+    "reserved_bytes": 0,
+    "peak_allocated_bytes": 0
+  },
+  "raw_response": "```json\n{\n  \"schema_version\": \"revo3_planner_v1\",\n  \"status\": \"NOT_READY\",\n  \"task\": null,\n  \"bbox\": null,\n  \"area\": 0.0,\n  \"confidence\": 0.0,\n  \"target_present\": false,\n  \"near_ready\": false,\n  \"compatible\": false,\n  \"ambiguity\": {\n    \"ambiguous\": true,\n    \"reason\": \"The object is a bottle, but it is not clearly centered and the bounding box is not fully accurate. The object is not fully visible or centered, making it ambiguous whether",
+  "schema_error": "JSONDecodeError: Unterminated string starting at: line 13 column 15 (char 262)",
+  "duration_ms": 13331.339219,
+  "cuda_after": {
+    "available": true,
+    "device": 0,
+    "name": "NVIDIA GeForce RTX 4080 SUPER",
+    "free_bytes": 29036838912,
+    "total_bytes": 33796456448,
+    "allocated_bytes": 4263599616,
+    "reserved_bytes": 4427087872,
+    "peak_allocated_bytes": 4352958976
+  },
+  "pid": 5953
+}

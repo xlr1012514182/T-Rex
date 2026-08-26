@@ -1,0 +1,51 @@
+{
+  "schema_version": "revo3-qwen-gpu-smoke-v1",
+  "verification_scope": "single model load and deterministic generation",
+  "model_id": "/root/autodl-tmp/revo3_trex_qwen_smoke_20260817/models/qwen3-vl-2b-instruct_89644892",
+  "revision": "89644892e4d85e24eaac8bacfd4f463576704203",
+  "image_source": "generated_synthetic_bottle_fixture",
+  "emg_action": "CLOSE",
+  "generation_succeeded": true,
+  "planner_schema_valid": true,
+  "task_success_defined": false,
+  "claims_excluded": [
+    "object-grounding accuracy",
+    "robot task success",
+    "latency certification",
+    "clinical performance"
+  ],
+  "cuda_before": {
+    "available": true,
+    "device": 0,
+    "name": "NVIDIA GeForce RTX 4080 SUPER",
+    "free_bytes": 33526841344,
+    "total_bytes": 33796456448,
+    "allocated_bytes": 0,
+    "reserved_bytes": 0,
+    "peak_allocated_bytes": 0
+  },
+  "raw_response": "```json\n{\n  \"schema_version\": \"revo3_planner_v1\",\n  \"status\": \"NOT_READY\",\n  \"task\": null,\n  \"bbox\": null,\n  \"area\": 0.0,\n  \"confidence\": 0.0,\n  \"target_present\": false,\n  \"near_ready\": false,\n  \"compatible\": false,\n  \"ambiguity\": {\n    \"ambiguous\": true,\n    \"reason\": \"The object is a bottle, but it is not clearly centered and the bounding box is not fully accurate. The object is not fully visible or centered, making it ambiguous whether it is the correct target.\",\n    \"candidates\": [\"bottle\", \"phone\", \"plastic_bag\", \"refrigerator_door\"],\n    \"question\": \"Is the bottle centered and fully visible in the image?\"\n  },\n  \"instruction\": \"Please confirm the bottle is centered and fully visible in the image.\"\n}\n```",
+  "decision": {
+    "status": "ASK_CLARIFY",
+    "task": null,
+    "bbox": null,
+    "area": 0.0,
+    "confidence": 0.0,
+    "target_present": false,
+    "near_ready": false,
+    "compatible": false,
+    "instruction": "Please confirm the bottle is centered and fully visible in the image."
+  },
+  "duration_ms": 14084.425313,
+  "cuda_after": {
+    "available": true,
+    "device": 0,
+    "name": "NVIDIA GeForce RTX 4080 SUPER",
+    "free_bytes": 29036838912,
+    "total_bytes": 33796456448,
+    "allocated_bytes": 4263599616,
+    "reserved_bytes": 4427087872,
+    "peak_allocated_bytes": 4352958976
+  },
+  "pid": 6610
+}

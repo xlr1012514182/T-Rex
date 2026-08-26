@@ -1,0 +1,9 @@
+timestamp=2026-08-18T00:19:54+08:00
+host_used_before_mib=44261
+method_specific_delta_kill_mib=65536
+host_hard_limit_mib=464417
+reason=8.5GB checkpoint plus constructed fp32/bf16 model requires a larger method-specific load allowance
+0, GPU-2ff8de4d-51ee-049b-5a1e-1101d6e58966, NVIDIA GeForce RTX 4080 SUPER, 32760 MiB, 1 MiB, 32230 MiB, 0 %
+               total        used        free      shared  buff/cache   available
+Mem:          515617       44260      315586         793      155769      466304
+Swap:              0           0           0
