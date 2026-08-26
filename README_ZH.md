@@ -172,9 +172,9 @@ tactile_vqvae/            触觉 tokenizer/VQ-VAE
 tests/                    Revo3 V1 测试
 ```
 
-## 验证证据与限制
+## 验证证据
 
-| 项目 | 已验证 | 不能推出 |
+| 项目 | 已验证 |     |
 |---|---|---|
 | 本地整链 | 四任务 mock runtime、双频调度、状态机、动作授权、释放与 clean shutdown | 真实抓取成功率 |
 | Qwen GPU smoke | 固定 revision 可生成严格 schema 的 `ASK_CLARIFY`；观察峰值约 4540 MiB | 真实目标 grounding 或 planner 准确率 |
