@@ -1,4 +1,4 @@
-# Revo3 V1 GNI-derived EMG primitive module
+# Revo 3 EMG primitive recognition
 
 The mainline protocol is:
 
@@ -35,14 +35,13 @@ The synthetic generator and `BinaryIntentGate` retain the old `OPEN=0` /
 CLOSE maps to POWER_GRASP and OPEN maps to RELEASE; it is not the V1 study
 label space.
 
-The synthetic corpus is an integration fixture, **not evidence of biological
-accuracy or user performance**.  It records subject, session and nanosecond
-timestamps.  Subjects are assigned as whole groups to train/validation/test;
+The synthetic corpus is a local integration fixture with subject, session
+and nanosecond timestamps.  Subjects are assigned as whole groups to train/validation/test;
 normalization is fitted only from train-manifest indices.
 The training dataset applies the released GNI-style circular electrode
 rotation augmentation (default `+/-2` channels) only to the train split.
 
-## Generate a smoke corpus
+## Generate local test data
 
 ```powershell
 python scripts/revo3_v1_generate_emg.py --output outputs/emg_synthetic --preset smoke
@@ -104,5 +103,5 @@ Daily 5–10 minute labelled calibration is available via
 `python -m revo3_v1.emg.calibration`. Temperature scaling is the default;
 prototype and classification-head-only options are explicit. Every artifact
 is bound to base-checkpoint bytes, normalization, preprocessing profile,
-channel order, subject/day/session, and rejects training-session leakage. It
-does not imply cross-day or clinical performance before participant testing.
+channel order, subject/day/session, and rejects training-session leakage.
+Evaluate recognition quality on independent held-out sessions.

@@ -1,5 +1,7 @@
 # T-Rex Dataset Quick Start
 
+This guide describes the upstream T-Rex bimanual dataset. Revo 3 data contracts and training are documented in the [Revo training guide](../docs/revo3_v1/TRAINING.md).
+
 Browse, inspect, and replay the [**T-Rex Dataset**](https://huggingface.co/datasets/zekaiwang/trex_dataset)
 ([LeRobotDataset v3.0](https://github.com/huggingface/lerobot)) — stream individual episodes without
 downloading the full ~1.4 TB.

@@ -1,8 +1,23 @@
-# Revo3 V1 数据、训练与迁移契约审计
+# Revo 3 数据、训练与推理
 
-审计日期：2026-08-18。范围仅覆盖 Revo policy 数据、T-Rex 训练、触觉 VQ/DIFF 组件与 checkpoint lineage；不构成真机安全批准，也不声称已在真实 Revo3/U21VT 数据上得到成功率。
+[项目首页](../../README_ZH.md) · [架构参考](README.md) · [数采与导出](../../teleop_data_collection/README.md) · [开发检查](../DEVELOPMENT.md)
 
-## 已冻结并接入代码的主线
+本指南对应 Revo 单手 21 维绝对关节动作。EMG 分类、Planner LoRA、触觉编码器与 VLA policy 分开训练，再由运行时组合。
+
+## 环境与入口
+
+本地运行和单元测试使用 `requirements-dev.txt`。完整模型训练使用 Python 3.10、PyTorch 2.6.0 和与运行环境匹配的 CUDA；依赖统一维护在根目录 `pyproject.toml`，安装入口为 `pip install -r requirements.txt`。DeepSpeed 训练环境建议使用 Linux。选择 CUDA wheel 时，以 PyTorch 官方安装说明为准。
+
+```bash
+python scripts/revo3_v1_trex.py train --help
+python scripts/revo3_v1_trex.py serve --help
+python scripts/revo3_v1_train_emg.py --help
+python -m revo3_v1.planner.lora_sft --help
+```
+
+启动器首先校验输入 artifact，默认只打印构造出的命令；显式 `--execute` 才启动训练或服务。
+
+## 数据契约
 
 - state 为连续 `q_rad[21]`；监督 action 为未来绝对关节目标 `[16,21]`。
 - action label 只能是控制器确认的 `accepted_exact_sent_teleop_target`。requested、measured、CAIR residual/authorized command 均不能冒充 nominal policy label。
@@ -33,16 +48,16 @@ DIFF encoder 使用 `DeformAEInfer` 架构在 Revo 五指 DIFF 上从头训练�
 
 serve 必须同时提供 frozen statistics 与 companion artifact。launcher 和 `scripts/test.py` 进程各自重新哈希，并要求 artifact、`training_args.json`、`checkpoint_lineage.json` 在 MIDTRAIN source、profile/family、capability/split 和 model SHA 上全部一致；同 shape 但内容不同的 statistics 也会失败。
 
-## T-Rex 训练 lineage 与优化参数
+## 训练阶段与参数组
 
-唯一主线为：
+默认训练主线为：
 
 1. W0：官方 `T-Rex_pretrain` -> Revo graph，1000 steps；不启用 tactile/FLARE。
 2. W1：W0 -> Profile A tactile graph，1500 steps；不启用 FLARE。
 3. Revo midtrain：W1 -> 22000 steps、最多 3 epochs、FLARE `0.5`。
 4. SFT：Revo midtrain -> 6500 steps、最多 3 epochs、FLARE `0.5`。
 
-全局有效 batch 固定 64；tactile dropout `0.10`、state dropout `0.05`。optimizer groups 为新 action/state `1e-4`、tactile expert `3e-5`、action expert 后四层 `1e-5`、FLARE `5e-6`，`weight_decay=0.01`。视觉/VLM、Revo VQ 和 DIFF encoder 在 policy midtrain/SFT 中冻结。
+全局有效 batch 固定 64；tactile dropout `0.10`、state dropout `0.05`。midtrain 参数组使用新 action/state/tactile `1e-4`、tactile expert `3e-5`、action expert 后四层及 inherited boundary `1e-5`、FLARE `5e-6`；SFT 对应降为 `5e-5 / 5e-6 / 5e-6 / 1e-6`。完整定义以 `revo3_v1/policy/training.py` 的 `STAGE_SPECS` 为准，`weight_decay=0.01`。视觉/VLM、Revo VQ 和 DIFF encoder 在 policy midtrain/SFT 中冻结。
 
 官方 pretrain 迁移会强制重建所有 Revo dimension-bound 与 tactile/DIFF/VQ 参数，即使源 tensor 与目标碰巧同形。之后仅允许相邻 stage 声明的新模块：W0->W1 为 tactile 组件，W1->midtrain 为 FLARE；midtrain->SFT 必须 exact。未在 allowlist 中的 missing、unexpected、shape mismatch 都会终止。官方 midtrain 只允许独立 heterogeneous-hand ablation，并先经过显式迁移审查。
 
@@ -50,23 +65,56 @@ serve 必须同时提供 frozen statistics 与 companion artifact。launcher 和
 
 仅 train 开启，development/locked test 关闭。full、center 与同一 sample 的所有 FLARE future 共用一组可复现参数：brightness ±20%、contrast ±15%、saturation ±10%、hue ±0.03、rotation ±3°、translation ≤3%；无 flip、无 random crop。Force6D 噪声只从 train split 的显式 context/no-contact 数据拟合 per-finger/per-axis robust center/scale/covariance，并按同一轴顺序采样；验证集不加噪声。
 
-## 当前仍需真实证据，代码会 fail-fast
 
-- Revo3/U21VT capability manifest、关节/单位/限位和 camera calibration SHA。
-- 真实 20 小时 corpus、严格 split 时长与 OOD 隔离结果。
-- controller receipt、action replay、RGB/label 人工复核和 readiness approval。
-- 真实 native Force6D ring 与五指 DIFF 时钟/skew/age 统计。
-- Revo VQ 和 DIFF 从头训练后的 checkpoint/artifact，以及 W0->W1->midtrain->SFT 实际 lineage。
-- 真机 replay、安全 envelope、触觉阈值和用户实验均不在本审计批准范围内。
+## 训练所需文件
 
-## 自动验证
+每次训练提供 base model、父阶段 checkpoint、checkpoint id/resume kind、训练和 development JSON，以及各自 conversion/readiness manifest。两组数据共享冻结 statistics 和 split identity。Profile A 在 W1 及后续阶段还需 Revo 专用 VQ-VAE 和 DIFF encoder 及其 companion artifact。
 
-在审计环境运行：
+官方上游 62 维双手权重不能通过切片或补零作为 Revo 21 维策略。主线从官方无触觉 pretrain 开始；官方 midtrain 只用于显式声明的异构迁移消融。
 
-```powershell
-D:\Embodied_AI_Master_Degree\python3_10_4\python.exe -m pytest -q
+下面是 W0 命令结构。路径是用户准备的本地模型和数据，不是自动下载位置；先检查 dry-run 输出，再按需添加 `--execute`。
+
+```bash
+python scripts/revo3_v1_trex.py train \
+  --stage w0 --mode main \
+  --base-model checkpoints/qwen3-vl-2b \
+  --checkpoint checkpoints/trex-pretrain \
+  --checkpoint-id miniFranka/T-Rex_pretrain_mecka22k_epoch1 \
+  --resume-kind official_pretrain \
+  --data-json data/revo/midtrain.json \
+  --conversion-manifest data/revo/midtrain_manifest.json \
+  --readiness-manifest data/revo/midtrain_readiness.json \
+  --development-data-json data/revo/development.json \
+  --development-conversion-manifest data/revo/development_manifest.json \
+  --development-readiness-manifest data/revo/development_readiness.json \
+  --tactile-profile-manifest data/revo/tactile_profile.json \
+  --output-dir outputs/revo-w0
 ```
 
-最终整仓结果：`427 passed`；其中 `tests/revo3_v1` 为 `290 passed`，
-`teleop_data_collection/tests` 为 `137 passed`。两个环境警告分别来自旧版
-`optree` 和 TensorFlow 对 distutils 的弃用提示。
+W1、midtrain、SFT 分别接续父权重，`--resume-kind` 对应使用 `revo_w0 / revo_w1 / revo_midtrain`，不绕过父阶段和 shape/key 检查。各阶段具体参数与 global batch 限制在启动器和训练器中同时校验。
+
+## 推理服务
+
+```bash
+python scripts/revo3_v1_trex.py serve \
+  --base-model checkpoints/qwen3-vl-2b \
+  --checkpoint checkpoints/revo-sft \
+  --stats-path data/revo/statistics.json \
+  --stats-artifact-path data/revo/statistics_artifact.json \
+  --identity-manifest-out outputs/revo-server-identity.json
+```
+
+服务启动前核对 checkpoint、lineage、统计量和传感器 profile。在线运行时使用服务生成的身份清单握手；仅形状相同不代表权重、触觉标定或归一化相容。
+
+## 其他训练组件
+
+- [EMG](../../revo3_v1/emg/README.md)：GNI 兼容层迁移、五类原语训练与日常校准。
+- [触觉 VQ-VAE](../../tactile_vqvae/README.md)：原生历史编码、重建及离散码。
+- DIFF encoder：`python scripts/train_revo_deform_ae.py --help`。
+- Planner：`revo3_v1/planner/training.py` 校验三帧全图加中心图、标注和 OOD 隔离，`lora_sft.py` 执行 LoRA 训练。
+
+合成数据与小规模流程训练集中在[开发指南](../DEVELOPMENT.md)，与真实训练入口分开使用。
+
+## 上游工具
+
+根目录 shell wrapper 从脚本位置解析项目路径，把参数转交给相应 Python CLI；不激活固定 Conda 环境，也不依赖作者机器目录。`scripts/train.sh` / `test.sh` 保留通用 T-Rex 训练与服务入口；Revo 训练推荐使用上述校验式 launcher。

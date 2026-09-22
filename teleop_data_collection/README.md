@@ -1,8 +1,10 @@
 # Revo 3 / Tianji 遥操作与原始数据采集
 
-> **当前状态：Mock / component-verified。** 本子项目已经用合成数据验证多频流录制、因果对齐、控制器标签溯源、崩溃边界以及 Revo 3 VLA 白名单导出；它**没有**完成 Tianji 真机接入，也**不代表**真机安全、遥操作质量、四类任务成功率或论文结果已经得到验证。任何硬件写入都必须先完成本文的 capability probe、人工 arming 与安全验收。
+原生多频流录制、手套重定向、Revo/Tianji 设备接口与训练数据导出。采集器将传感器原始流、控制器回执和派生训练字段分层管理，保持时间因果性与动作标签可追溯。
 
-## 1. 项目边界
+[项目首页](../README_ZH.md) · [系统架构](../docs/revo3_v1/README.md) · [训练指南](../docs/revo3_v1/TRAINING.md)
+
+## 1. 功能与接口
 
 `teleop_data_collection/` 是 T-Rex 主训练代码之外的独立数采子项目。它负责：
 
@@ -550,7 +552,7 @@ Tianji 控制器中的 payload 必须包含实际安装的 Revo 3、转接板、
 - 在因果投影前检查每流严格单调、最大 age、掉包和未来样本；
 - 相机 exposure time 优先于解码/回调时间；若取不到，必须明确其替代时间语义。
 
-## 13. 测试与当前证据等级
+## 13. 自动化测试
 
 从仓库根目录运行完整组件测试：
 
@@ -583,17 +585,9 @@ py -3.10 -m pytest -q teleop_data_collection/tests tests/revo3_v1
 - 经核验 MANUS node 的单位换算、相对 wrist retarget、Cartesian 边界、注入式 IK 收敛/残差/joint-order 与 stale-pose 拒绝。
 - BrainCo 6-flex 无映射时拒绝、显式 `[21,6]` 标定映射，以及 MANUS fake retarget 请求必须经过 Revo safety/controller write 后才产生 exact-sent 标签。
 
-该证据等级是 **component-verified synthetic fixture**，只说明接口与数据谱系按测试实现。它不说明：
+自动化测试使用合成 fixture 与注入式 SDK client，检查数据契约、单位转换和授权行为；真实设备接入按下一节完成现场验收。Mock 输出与实际采集 episode 分开保存。
 
-- Tianji 或 Revo 真机 SDK 已成功连接；
-- MANUS/BrainCo 手套已完成真实重定向；
-- 真实控制频率、延迟与时间同步已达标；
-- payload/COM、限位和急停已验收；
-- 合成 `exact_sent_target` 等于物理执行状态；
-- 抓瓶子、握手机、提袋或开冰箱门在真机上成功；
-- 当前数据可用于报告泛化能力、受试者获益或论文级结果。
-
-## 14. 真机阶段的最小升级顺序
+## 14. 设备接入流程
 
 1. 获取 Tianji 当前官方 SDK、版本、许可证、安全手册和厂商示例；
 2. 对 Revo、Tianji、相机、手套、EMG 分别完成只读 capability probe；
@@ -605,4 +599,4 @@ py -3.10 -m pytest -q teleop_data_collection/tests tests/revo3_v1
 8. 回放审计 controller receipt、视频、状态和时钟，人工批准 episode；
 9. 最后才启用完整 glove→retargeter→safety→controller 数采，并分别导出 VLA 与 EMG 数据产品。
 
-在第 1–8 步形成可复核证据前，不应把 `configs/hardware.example.json` 改成可自动 arming 的默认配置，也不应把任何 Mock 成功输出描述为硬件完成度。
+配置模板始终保持默认写入关闭。每次部署都需完成设备身份和标定核验，由操作员显式 arming；程序启动和 dry-run 不自动连接或驱动设备。

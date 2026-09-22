@@ -1,2 +1,8 @@
-# Preserve byte-for-byte remote smoke evidence across Windows checkouts.
-audit/remote_gpu_smoke_20260817/** -text
+# Portable shell entry points and text normalization.
+* text=auto
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.stl binary
+*.STEP binary
