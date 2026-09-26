@@ -37,3 +37,17 @@ scripts/test_output*/
 tactile_vqvae/logs/
 tactile_vqvae/plots*/
 training_data/
+
+# Local tests and integration artifacts
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.local/
+.venv-*/
+/data/
+/checkpoints/
+*.pt
+*.pth
+*.ckpt
+*.safetensors

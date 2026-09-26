@@ -1,0 +1,56 @@
+{
+  "schema_version": "revo3-hardware-probe-config-v1",
+  "allow_hardware_probe": false,
+  "allow_hardware_write": false,
+  "revo": {
+    "enabled": false,
+    "port": null,
+    "slave_id": null,
+    "expected_serial": "REPLACE_FROM_DEVICE_LABEL",
+    "expected_sdk_version": "1.5.1"
+  },
+  "emg": {
+    "enabled": false,
+    "port_name": "REPLACE_AFTER_USB_DISCOVERY",
+    "baudrate": 115200,
+    "emg_buffer_length": 1250,
+    "expected_sdk_version": "0.5.0"
+  },
+  "glove": {
+    "enabled": false,
+    "port_name": "REPLACE_AFTER_USB_DISCOVERY",
+    "baudrate": 115200,
+    "expected_serial": "REPLACE_FROM_DEVICE_LABEL",
+    "expected_sdk_version": "0.5.0"
+  },
+  "visiontouch": {
+    "enabled": false,
+    "force_model_dir": "REPLACE_WITH_PARENT_OF_PER_SN_MODEL_DIRECTORIES",
+    "expected_sdk_version": "1.0.10",
+    "finger_serials": {
+      "thumb": "REPLACE_THUMB_SN",
+      "index": "REPLACE_INDEX_SN",
+      "middle": "REPLACE_MIDDLE_SN",
+      "ring": "REPLACE_RING_SN",
+      "pinky": "REPLACE_PINKY_SN"
+    },
+    "expected_model_sha256": {
+      "thumb": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "index": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "middle": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "ring": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "pinky": "REPLACE_WITH_64_LOWERCASE_HEX"
+    }
+  },
+  "camera": {
+    "enabled": false,
+    "device": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 30.0,
+    "backend": null,
+    "require_exact_resolution": true,
+    "fps_tolerance": 1.0,
+    "calibration_file": "REPLACE_WITH_VERSIONED_FISHEYE_CALIBRATION"
+  }
+}

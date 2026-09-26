@@ -1,0 +1,140 @@
+{
+  "schema_version": "revo3-hardware-collection-v1",
+  "mode": "hardware_collection",
+  "allow_hardware_connect": false,
+  "allow_hardware_write": false,
+  "episode": {
+    "episode_id": "REPLACE_UNIQUE_EPISODE_ID",
+    "task_id": "REPLACE_STABLE_TASK_ID",
+    "task_version": 1,
+    "task": "bottle",
+    "object_id": "REPLACE_OBJECT_CATEGORY",
+    "object_instance": "REPLACE_OBJECT_INSTANCE_ID",
+    "operator": "REPLACE_PSEUDONYMIZED_OPERATOR_ID",
+    "collection_day": "REPLACE_YYYY_MM_DD",
+    "grasp_primitive": "POWER_GRASP",
+    "instruction_source": "frozen_planner",
+    "planner_revision": "REPLACE_VERSIONED_PLANNER_REVISION",
+    "planner_output_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+    "instruction": "REPLACE_WITH_REVIEWED_PLANNER_INSTRUCTION",
+    "duration_s": 10.0,
+    "anchor_start_delay_s": 0.5
+  },
+  "outputs": {
+    "master_root": "../outputs/hardware_master",
+    "vla_root": "../outputs/revo3_vla",
+    "emg_review_root": "../outputs/emg_review_staging",
+    "export_vla_after_commit": true
+  },
+  "runtime": {
+    "control_step_timeout_ms": 25,
+    "max_command_latency_ms": 25,
+    "shutdown_timeout_ms": 2000,
+    "safety_watchdog_budget_ms": 50,
+    "camera_stream": "camera_rectified",
+    "state_stream": "revo_state",
+    "tactile_stream": "tactile",
+    "anchor_streams": [
+      "camera_rectified",
+      "revo_state",
+      "tactile"
+    ],
+    "required_source_timeouts_ms": {
+      "camera_rectified": 150,
+      "revo_state": 100,
+      "tactile": 150,
+      "emg": 250
+    },
+    "vla_camera_stream": "camera_rectified",
+    "vla_state_stream": "revo_state",
+    "vla_tactile_stream": "tactile"
+  },
+  "revo": {
+    "state_stream": "revo_state",
+    "expected_serial": "REPLACE_FROM_DEVICE_LABEL",
+    "expected_probe_fingerprint": "REPLACE_WITH_64_LOWERCASE_HEX",
+    "expected_sdk_version": "1.5.1",
+    "joint_order_hash": "659198b4ae6f2627e0bdd5c16a3be5c28e246ae93669d49077fb9b48b16bff7f",
+    "feedback_velocity_unit": "REPLACE_WITH_rpm_OR_deg_per_s",
+    "feedback_current_unit": "REPLACE_WITH_mA_OR_A",
+    "q_min_rad": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+    "q_max_rad": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+    "max_delta_rad": [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+    "state_units_bench_verified": false,
+    "u21vt_identity_verified": false,
+    "tactile_zero_and_saturation_verified": false,
+    "physical_estop_verified": false,
+    "hold_path_verified": false,
+    "limits_verified": false
+  },
+  "camera": {
+    "rectified_stream": "camera_rectified",
+    "camera_profile_id": "revo3_full_center_v1",
+    "expected_probe_fingerprint": "REPLACE_WITH_64_LOWERCASE_HEX",
+    "calibration_file": "REPLACE_WITH_VERSIONED_FISHEYE_CALIBRATION",
+    "calibration_sha256": "REPLACE_WITH_64_LOWERCASE_HEX"
+  },
+  "emg": {
+    "stream": "emg",
+    "expected_serial": "REPLACE_FROM_DEVICE_DISCOVERY",
+    "expected_discovery_fingerprint": "REPLACE_WITH_64_LOWERCASE_HEX",
+    "expected_sdk_version": "0.5.0"
+  },
+  "tactile": {
+    "mode": "visiontouch_force6d",
+    "stream": "tactile",
+    "capture_profile": "force6d_diff",
+    "vla_tactile_profile": "profile_a_force6d_diff",
+    "max_inter_finger_skew_ns": null,
+    "checkpoint_family_id": "REPLACE_REVO3_CHECKPOINT_FAMILY",
+    "normalization_family_id": "REPLACE_REVO3_NORMALIZATION_FAMILY",
+    "capability_manifest_sha256": "REPLACE_WITH_64_LOWERCASE_HEX",
+    "force_model_dir": "REPLACE_WITH_PARENT_OF_PER_SN_MODEL_DIRECTORIES",
+    "finger_serials": {
+      "thumb": "REPLACE_THUMB_SN",
+      "index": "REPLACE_INDEX_SN",
+      "middle": "REPLACE_MIDDLE_SN",
+      "ring": "REPLACE_RING_SN",
+      "pinky": "REPLACE_PINKY_SN"
+    },
+    "expected_model_sha256": {
+      "thumb": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "index": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "middle": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "ring": "REPLACE_WITH_64_LOWERCASE_HEX",
+      "pinky": "REPLACE_WITH_64_LOWERCASE_HEX"
+    },
+    "pressure_projection_revision": null,
+    "pressure_projection_bench_verified": false
+  },
+  "glove": {
+    "enabled": false,
+    "acquisition_mode": "external_timestamped_ipc",
+    "ipc_clock_domain": "REPLACE_SHARED_MONOTONIC_OR_OFFSET_CALIBRATED_DOMAIN",
+    "ipc_streams": ["glove_flex", "glove_imu", "glove_mag"],
+    "required_for_episode": true,
+    "source_factory": null,
+    "expected_source_module_sha256": null,
+    "retarget_factory": null,
+    "expected_retarget_module_sha256": null,
+    "calibration_file": null,
+    "calibration_sha256": null,
+    "calibration_revision": "UNVERIFIED"
+  },
+  "tianji": {
+    "enabled": false,
+    "config_path": "hardware.example.json"
+  },
+  "assembly_factory": {
+    "factory": null,
+    "expected_module_sha256": null,
+    "kwargs": {}
+  },
+  "notes": [
+    "This checked-in template is intentionally non-executable and connects no device.",
+    "The hash-verified assembly must construct concrete probed clients, safety paths and verified retarget plugins.",
+    "BrainCo glove and BrainCo EDU EMG must run in separate libedu processes; glove samples enter through timestamp-preserving IPC.",
+    "No glove sample is converted into a Revo or Tianji target by the common orchestrator.",
+    "Only accepted exact_sent Revo receipts supervise 30 Hz anchors; EMG remains outside the VLA projection."
+  ]
+}

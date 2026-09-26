@@ -1,5 +1,7 @@
 # Hardware Code: SharpaDexmateTeleop
 
+This directory preserves the upstream T-Rex bimanual hardware reference. For the Revo 3 collection stack, use the [Revo/Tianji guide](../teleop_data_collection/README.md).
+
 Bimanual teleoperation stack for a [Dexmate Vega](https://dexmate.ai) humanoid
 equipped with two [Sharpa Wave](https://www.sharpa.com) dexterous hands — the
 system used to collect the T-Rex dataset.

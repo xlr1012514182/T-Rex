@@ -29,8 +29,11 @@ import argparse
 import shutil
 import math
 import re
+import hashlib
+import copy
 import wandb
 import PIL.Image
+import PIL.ImageEnhance
 import numpy as np
 
 from typing import List, Dict
@@ -44,6 +47,18 @@ from transformers import AutoProcessor, set_seed
 from datasets import Dataset as HFDataset
 
 from qwen_vla import Qwen3VLVLAModel, extend_position_ids_for_flare, split_slow_fast_embeds
+from revo3_v1.policy.training import (
+    build_revo_optimizer_groups,
+    configure_revo_trainable_parameters,
+    stage_spec as revo_stage_spec,
+)
+from revo3_v1.policy.checkpoint import load_revo_compatible_state_dict
+from revo3_v1.policy.artifacts import (
+    sha256_file as artifact_sha256_file,
+    validate_revo_deform_artifact,
+    validate_revo_vqvae_artifact,
+)
+from revo3_v1.revo.contracts import JOINT_ORDER_HASH
 import cv2
 
 logger = logging.getLogger(__name__)
@@ -71,7 +86,7 @@ def _axis_angle_to_arm9d(arm_aa):
     return np.concatenate([arm_aa[:3], R[:, 0], R[:, 1]])
 
 
-def add_tracking_error_noise(state, te_mean, te_std, action_dim):
+def add_tracking_error_noise(state, te_mean, te_std, action_dim, clip_rad=None):
     """Add tracking-error noise to robot state.
 
     Supports single-arm (action_dim=31, te=28D) and bimanual (action_dim=62, te=56D).
@@ -82,6 +97,18 @@ def add_tracking_error_noise(state, te_mean, te_std, action_dim):
       4. Convert back to [trans, rot6d]
     """
     noisy = state.copy()
+    if action_dim == 21:
+        if np.asarray(state).shape != (21,):
+            raise ValueError(f"Revo state must be [21], got {np.asarray(state).shape}")
+        if np.asarray(te_mean).shape != (21,) or np.asarray(te_std).shape != (21,):
+            raise ValueError(
+                "Revo tracking-error statistics must be 21-D; the upstream "
+                "action_dim//31 helper would otherwise inject no noise"
+            )
+        noise = np.random.normal(te_mean, te_std).astype(np.float32)
+        if clip_rad is not None and float(clip_rad) > 0:
+            noise = np.clip(noise, -float(clip_rad), float(clip_rad))
+        return noisy + noise
     n_arms = action_dim // 31
     for arm_idx in range(n_arms):
         offset = arm_idx * 31
@@ -113,20 +140,76 @@ def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
     return LambdaLR(optimizer, lr_lambda, last_epoch=-1)
 
 
+def sample_revo_image_augmentation(seed: int, episode_id: str, frame_index: int):
+    """Sample the frozen Revo augmentation once for an atomic two-view item."""
+    digest = hashlib.sha256(
+        f"{int(seed)}:{episode_id}:{int(frame_index)}".encode("utf-8")
+    ).digest()
+    rng = np.random.RandomState(int.from_bytes(digest[:4], "little"))
+    return {
+        "brightness": float(rng.uniform(0.80, 1.20)),
+        "contrast": float(rng.uniform(0.85, 1.15)),
+        "saturation": float(rng.uniform(0.90, 1.10)),
+        "hue": float(rng.uniform(-0.03, 0.03)),
+        "rotation_deg": float(rng.uniform(-3.0, 3.0)),
+        "translate_x_fraction": float(rng.uniform(-0.03, 0.03)),
+        "translate_y_fraction": float(rng.uniform(-0.03, 0.03)),
+    }
+
+
+def apply_revo_image_augmentation(image, params):
+    """Apply shared mild geometry/color jitter without changing crop geometry."""
+    image = image.convert("RGB")
+    width, height = image.size
+    # Rotate and translate the already-derived full/center views with the same
+    # normalized parameters. No flip and no additional random crop are used.
+    image = image.rotate(
+        params["rotation_deg"],
+        resample=PIL.Image.Resampling.BICUBIC,
+        translate=(
+            int(round(params["translate_x_fraction"] * width)),
+            int(round(params["translate_y_fraction"] * height)),
+        ),
+        fillcolor=(0, 0, 0),
+    )
+    image = PIL.ImageEnhance.Brightness(image).enhance(params["brightness"])
+    image = PIL.ImageEnhance.Contrast(image).enhance(params["contrast"])
+    image = PIL.ImageEnhance.Color(image).enhance(params["saturation"])
+    hsv = np.asarray(image.convert("HSV"), dtype=np.uint8).copy()
+    hue_shift = int(round(params["hue"] * 255.0))
+    hsv[..., 0] = (hsv[..., 0].astype(np.int16) + hue_shift) % 256
+    return PIL.Image.fromarray(hsv, mode="HSV").convert("RGB")
+
+
 class SftDataset(Dataset):
-    def __init__(self, config, processor, accelerator):
+    def __init__(self, config, processor, accelerator, *, training=True):
         self.config = config
         self.processor = processor
         self.accelerator = accelerator
+        self.training = bool(training)
 
         self.hf_dataset = HFDataset.from_json(
             config.data_path, keep_in_memory=False,
         )
 
-        stats_path = config.data_path.replace(".json", "_statistics.json")
+        stats_path = getattr(config, "stats_path", "") or config.data_path.replace(
+            ".json", "_statistics.json"
+        )
         with open(stats_path, "r") as f:
             self.stats_data = json.load(f)
         self.dataset_name = next(iter(self.stats_data))
+        first_record = self.hf_dataset[0] if len(self.hf_dataset) else {}
+        self.is_revo_dataset = first_record.get("schema_version") == "revo3-trex-json-v1"
+        if self.is_revo_dataset:
+            if not getattr(config, "stats_path", ""):
+                raise ValueError(
+                    "Revo datasets require an explicit frozen MIDTRAIN_TRAIN --stats_path"
+                )
+            expected_profile = str(getattr(config, "tactile_profile", ""))
+            if first_record.get("tactile_profile") != expected_profile:
+                raise ValueError(
+                    "Revo dataset tactile profile does not match the requested checkpoint family"
+                )
 
         def _arr(key, sub):
             return np.array(self.stats_data[self.dataset_name][key][sub])
@@ -137,13 +220,77 @@ class SftDataset(Dataset):
         self.state_mask  = _arr("state",  "mask")
         self.state_min   = _arr("state",  "q01")
         self.state_max   = _arr("state",  "q99")
-        self.tacf6_mask  = _arr("tactile_f6", "mask")
-        self.tacf6_min   = _arr("tactile_f6", "q01")
-        self.tacf6_max   = _arr("tactile_f6", "q99")
+        self.tactile_num_fingers = int(getattr(config, "tactile_num_fingers", 10))
+        requires_force = bool(
+            getattr(config, "use_tactile_vec", 0)
+            or getattr(config, "use_tactile_vqvae", 0)
+        )
+        if requires_force:
+            self.tacf6_mask = _arr("tactile_f6", "mask")
+            self.tacf6_min = _arr("tactile_f6", "q01")
+            self.tacf6_max = _arr("tactile_f6", "q99")
+            expected_tactile_dim = self.tactile_num_fingers * 6
+            for name, values in (
+                ("mask", self.tacf6_mask),
+                ("q01", self.tacf6_min),
+                ("q99", self.tacf6_max),
+            ):
+                if np.asarray(values).size != expected_tactile_dim:
+                    raise ValueError(
+                        f"tactile_f6 {name} has {np.asarray(values).size} values; "
+                        f"expected {expected_tactile_dim}; fake hand padding is forbidden"
+                    )
+            noise = self.stats_data[self.dataset_name].get("tactile_no_contact_noise")
+            if not isinstance(noise, dict):
+                raise ValueError("Revo Force6D stats require no-contact noise provenance")
+            self.tactile_noise_center = np.asarray(
+                noise.get("robust_center"), dtype=np.float32
+            )
+            self.tactile_noise_scale = np.asarray(
+                noise.get("robust_scale"), dtype=np.float32
+            )
+            self.tactile_noise_covariance = np.asarray(
+                noise.get("covariance"), dtype=np.float32
+            )
+            if (
+                self.tactile_noise_center.shape != (self.tactile_num_fingers, 6)
+                or self.tactile_noise_scale.shape != (self.tactile_num_fingers, 6)
+                or self.tactile_noise_covariance.shape
+                != (expected_tactile_dim, expected_tactile_dim)
+                or noise.get("normalization_family_id")
+                != getattr(config, "normalization_family_id", "")
+                or noise.get("checkpoint_family_id")
+                != getattr(config, "checkpoint_family_id", "")
+            ):
+                raise ValueError("Revo no-contact noise stats/profile family mismatch")
+            if not (
+                np.isfinite(self.tactile_noise_center).all()
+                and np.isfinite(self.tactile_noise_scale).all()
+                and np.isfinite(self.tactile_noise_covariance).all()
+            ):
+                raise ValueError("Revo no-contact noise statistics must be finite")
+            covariance = 0.5 * (
+                self.tactile_noise_covariance
+                + self.tactile_noise_covariance.T
+            )
+            eigenvalues, eigenvectors = np.linalg.eigh(covariance.astype(np.float64))
+            # Quantizing the train-only covariance to JSON/float32 can create
+            # tiny negative eigenvalues.  Project only that numerical residue
+            # to the PSD cone; a materially indefinite artifact is rejected.
+            if float(eigenvalues.min(initial=0.0)) < -1e-5:
+                raise ValueError("Revo no-contact covariance is not positive semidefinite")
+            eigenvalues = np.maximum(eigenvalues, 1e-10)
+            self.tactile_noise_covariance = (
+                (eigenvectors * eigenvalues) @ eigenvectors.T
+            ).astype(np.float32)
+        else:
+            self.tacf6_mask = self.tacf6_min = self.tacf6_max = np.empty((0,))
+            self.tactile_noise_center = self.tactile_noise_scale = np.empty((0,))
+            self.tactile_noise_covariance = np.empty((0, 0))
 
         # Tracking error stats for state noise injection (used when use_robot_state=1)
         # Dimension: 28D per arm (6 arm + 22 hand), scales with n_arms
-        te_dim = (config.action_dim // 31) * 28
+        te_dim = 21 if config.action_dim == 21 else (config.action_dim // 31) * 28
         te_stats = self.stats_data[self.dataset_name].get("tracking_error", {})
         self.te_mean = np.array(te_stats.get("mean", np.zeros(te_dim)), dtype=np.float32)
         self.te_std  = np.array(te_stats.get("std",  np.zeros(te_dim)), dtype=np.float32)
@@ -164,7 +311,7 @@ class SftDataset(Dataset):
         # alignment as utils/encode_vqvae_codes_to_json.py).
         self.use_tactile_vqvae = bool(getattr(config, "use_tactile_vqvae", 0))
         self.vqvae_window = int(getattr(config, "vqvae_window", 16))
-        self._ep_f6 = {}        # ep_dir -> np.ndarray [N_ep, 10, 6]
+        self._ep_f6 = {}        # episode -> np.ndarray [N_ep, F, 6]
         self._f6_loc = {}       # (ep_dir, frame) -> position in that episode
         if self.use_tactile_vqvae:
             self._build_f6_history_index()
@@ -175,18 +322,23 @@ class SftDataset(Dataset):
         """Group per-sample tactile_f6 by episode (sorted by frame) so a sample
         at frame f can fetch the previous `window` F6 frames (left-padded)."""
         frame_re = re.compile(r"(.+/episode_\d+)/image(\d+)_")
-        by_ep = {}  # ep_dir -> list of (frame, f6[10,6])
+        by_ep = {}  # episode -> list of (frame, f6[F,6])
         n = len(self.hf_dataset)
         for i in range(n):
             s = self.hf_dataset[i]
             deforms = s.get("tactile_image_deform", []) or []
-            if not deforms:
-                continue
-            m = frame_re.search(deforms[0])
-            if not m:
-                continue
-            ep_dir, frame = m.group(1), int(m.group(2))
-            f6 = np.asarray(s["tactile_f6"], dtype=np.float32).reshape(10, 6)
+            if s.get("episode_id") is not None and s.get("frame_index") is not None:
+                ep_dir, frame = str(s["episode_id"]), int(s["frame_index"])
+            else:
+                if not deforms:
+                    continue
+                m = frame_re.search(deforms[0])
+                if not m:
+                    continue
+                ep_dir, frame = m.group(1), int(m.group(2))
+            f6 = np.asarray(s["tactile_f6"], dtype=np.float32).reshape(
+                self.tactile_num_fingers, 6
+            )
             by_ep.setdefault(ep_dir, []).append((frame, f6))
         for ep_dir, items in by_ep.items():
             items.sort(key=lambda t: t[0])
@@ -198,7 +350,7 @@ class SftDataset(Dataset):
             f"window={self.vqvae_window}")
 
     def _f6_history_for_sample(self, sample) -> np.ndarray:
-        """Return the raw [window, 10, 6] F6 history ending at this sample.
+        """Return the raw [window, F, 6] F6 history ending at this sample.
 
         Mirrors utils/encode_vqvae_codes_to_json._build_windows: the previous
         `window` samples in episode order, left-edge-padded with the episode's
@@ -208,11 +360,16 @@ class SftDataset(Dataset):
         W = self.vqvae_window
         frame_re = re.compile(r"(.+/episode_\d+)/image(\d+)_")
         deforms = sample.get("tactile_image_deform", []) or []
-        cur = np.asarray(sample["tactile_f6"], dtype=np.float32).reshape(1, 10, 6)
-        m = frame_re.search(deforms[0]) if deforms else None
-        if m is None:
-            return np.repeat(cur, W, axis=0)
-        ep_dir, frame = m.group(1), int(m.group(2))
+        cur = np.asarray(sample["tactile_f6"], dtype=np.float32).reshape(
+            1, self.tactile_num_fingers, 6
+        )
+        if sample.get("episode_id") is not None and sample.get("frame_index") is not None:
+            ep_dir, frame = str(sample["episode_id"]), int(sample["frame_index"])
+        else:
+            m = frame_re.search(deforms[0]) if deforms else None
+            if m is None:
+                return np.repeat(cur, W, axis=0)
+            ep_dir, frame = m.group(1), int(m.group(2))
         pos = self._f6_loc.get((ep_dir, frame))
         arr = self._ep_f6.get(ep_dir)
         if pos is None or arr is None:
@@ -235,17 +392,36 @@ class SftDataset(Dataset):
         return len(self.hf_dataset)
 
     def create_val_split(self, val_ratio=0.05, seed=42):
-        """Split the dataset into train/val. Returns a new SftDataset for val."""
+        """Split train/val, grouping by episode when ``episode_id`` exists."""
         import copy
         n = len(self.hf_dataset)
-        n_val = max(1, int(n * val_ratio))
         rng = np.random.RandomState(seed)
-        perm = rng.permutation(n)
-        val_indices = sorted(perm[:n_val].tolist())
-        train_indices = sorted(perm[n_val:].tolist())
+        episode_ids = [self.hf_dataset[i].get("episode_id") for i in range(n)]
+        if n and all(value is not None for value in episode_ids):
+            unique_episodes = sorted({str(value) for value in episode_ids})
+            if len(unique_episodes) < 2:
+                raise ValueError("Episode-grouped validation requires at least two episodes")
+            permuted = rng.permutation(unique_episodes)
+            n_val_episodes = min(
+                len(unique_episodes) - 1,
+                max(1, int(round(len(unique_episodes) * val_ratio))),
+            )
+            val_episode_set = set(permuted[:n_val_episodes].tolist())
+            val_indices = [
+                i for i, value in enumerate(episode_ids) if str(value) in val_episode_set
+            ]
+            train_indices = [
+                i for i, value in enumerate(episode_ids) if str(value) not in val_episode_set
+            ]
+        else:
+            n_val = max(1, int(n * val_ratio))
+            perm = rng.permutation(n)
+            val_indices = sorted(perm[:n_val].tolist())
+            train_indices = sorted(perm[n_val:].tolist())
 
         val_ds = copy.copy(self)
         val_ds.hf_dataset = self.hf_dataset.select(val_indices)
+        val_ds.training = False
 
         self.hf_dataset = self.hf_dataset.select(train_indices)
 
@@ -271,6 +447,23 @@ class SftDataset(Dataset):
             img = img.resize(self.image_size, PIL.Image.LANCZOS)
         return img
 
+    def _revo_augment_params(self, sample):
+        if not (
+            self.training
+            and self.is_revo_dataset
+            and bool(getattr(self.config, "revo_image_augmentation", 0))
+        ):
+            return None
+        return sample_revo_image_augmentation(
+            getattr(self.config, "augmentation_seed", getattr(self.config, "seed", 42)),
+            str(sample.get("episode_id", "")),
+            int(sample.get("frame_index", -1)),
+        )
+
+    def _open_with_params(self, rel_path, params):
+        image = self._open(rel_path)
+        return image if params is None else apply_revo_image_augmentation(image, params)
+
     def _open_gray(self, path):
         full = path if os.path.isabs(path) else os.path.join(self.img_dir, path)
         img = PIL.Image.open(full).convert("L")
@@ -282,6 +475,25 @@ class SftDataset(Dataset):
             torch.tensor(1.0, dtype=torch.float32, device=device),
         )
         return (d.sample((n,)) * 0.999 + 0.001).to(torch.bfloat16)
+
+    def _add_revo_tactile_noise(self, values):
+        if not (
+            self.training
+            and self.is_revo_dataset
+            and bool(getattr(self.config, "revo_tactile_noise_augmentation", 0))
+        ):
+            return values
+        arr = np.asarray(values, dtype=np.float32).copy()
+        flat_count = int(np.prod(arr.shape[:-2]))
+        noise = np.random.multivariate_normal(
+            np.zeros(self.tactile_num_fingers * 6, dtype=np.float32),
+            self.tactile_noise_covariance,
+            size=flat_count,
+            check_valid="raise",
+        ).astype(np.float32)
+        bound = np.maximum(3.0 * self.tactile_noise_scale.reshape(-1), 1e-8)
+        noise = np.clip(noise, -bound, bound).reshape(arr.shape)
+        return arr + noise
 
     def _load_flare_frame(self, sample, k, K, frame_stride):
         slow_path = sample.get("input_image_slow", [""])[0]
@@ -310,6 +522,56 @@ class SftDataset(Dataset):
     def collate_fn(self, batch: List[Dict]) -> Dict:
         cfg = self.config
         B = len(batch)
+        is_revo = [x.get("schema_version") == "revo3-trex-json-v1" for x in batch]
+        if any(is_revo) and not all(is_revo):
+            raise ValueError("one batch cannot mix Revo and upstream T-Rex schemas")
+        if all(is_revo):
+            for sample in batch:
+                def _contains_emg(value):
+                    if isinstance(value, dict):
+                        return any(
+                            "emg" in str(key).lower() or _contains_emg(item)
+                            for key, item in value.items()
+                            if str(key).lower() != "contains_emg"
+                        )
+                    if isinstance(value, (list, tuple)):
+                        return any(_contains_emg(item) for item in value)
+                    return False
+                if _contains_emg(sample) or sample.get("contains_emg") is not False:
+                    raise ValueError("EMG is recursively forbidden from every Revo policy batch")
+                if sample.get("tactile_profile") != cfg.tactile_profile:
+                    raise ValueError("one batch cannot cross tactile profile/checkpoint families")
+                if sample.get("checkpoint_family_id") != cfg.checkpoint_family_id:
+                    raise ValueError("dataset/checkpoint tactile family mismatch")
+                if sample.get("normalization_family_id") != cfg.normalization_family_id:
+                    raise ValueError("dataset/normalization tactile family mismatch")
+                if sample.get("action_label_source") != "controller_target" or sample.get(
+                    "action_semantics"
+                ) != "accepted_exact_sent_teleop_target":
+                    raise ValueError("Revo labels must be accepted exact-sent controller targets")
+                if sample.get("contains_cair_residual") is not False:
+                    raise ValueError("CAIR-adjusted commands cannot supervise the nominal policy")
+                if sample.get("policy_loss_eligible") is not True:
+                    raise ValueError("ineligible pre-roll frame reached the policy loss")
+                if len(sample.get("action_write_timestamp_ns", [])) != 16:
+                    raise ValueError("Revo action chunk lacks 16 write-boundary receipts")
+                if len(set(sample.get("action_request_id_hash", []))) != 16:
+                    raise ValueError("Revo action chunk request receipts must be unique")
+                slow_views = sample.get("input_image_slow")
+                fast_views = sample.get("input_image_fast")
+                if not (
+                    isinstance(slow_views, list) and len(slow_views) == 1
+                    and isinstance(fast_views, list) and len(fast_views) == 1
+                ):
+                    raise ValueError(
+                        "Revo samples require full->slow and fixed_center->fast slots"
+                    )
+                if sample.get("rgb_full_timestamp_ns") != sample.get("rgb_center_timestamp_ns"):
+                    raise ValueError("Revo full and fixed-center views must share a timestamp")
+                if sample.get("rgb_receive_timestamp_ns", 2**63 - 1) > sample.get(
+                    "action_decision_timestamp_ns", -1
+                ):
+                    raise ValueError("Revo camera observation arrived after policy decision")
 
         actions = np.array([x["action"] for x in batch], dtype=np.float32)
         actions = actions.reshape(B, -1, cfg.action_dim)
@@ -323,9 +585,68 @@ class SftDataset(Dataset):
         x_t = t_ * noise + (1 - t_) * norm_actions
         u_t = noise - norm_actions
 
+        # For the reviewed Revo schema, independently sample one of the
+        # physical delay offsets 0/4/8/12 for each item.  The matching dense
+        # history is selected below for the embedded VQ-VAE.  Legacy upstream
+        # records retain their original current-frame behavior.
+        selected_delay_indexes = np.zeros(B, dtype=np.int64)
+        # Index 2 is the causal latest sample. Training may jitter to the two
+        # preceding candidates; validation/test always use latest.
+        selected_jitter_indexes = np.full(B, 2, dtype=np.int64)
+        selected_tacf6 = None
+        if all(is_revo):
+            delayed_rows = []
+            force_required = cfg.tactile_profile in {
+                "profile_a_force6d_diff", "ablation_force6d_only"
+            }
+            for item_index, sample in enumerate(batch):
+                if sample.get("tactile_delay_offsets") != [0, 4, 8, 12]:
+                    raise ValueError("Revo tactile_delay_offsets must be [0,4,8,12]")
+                selected_delay_indexes[item_index] = np.random.randint(0, 4)
+                if self.training:
+                    selected_jitter_indexes[item_index] = np.random.randint(0, 3)
+                if sample.get("tactile_temporal_jitter_samples") != [-1, 0, 1]:
+                    raise ValueError("Revo tactile jitter contract must be [-1,0,1]")
+                if sample.get("tactile_temporal_jitter_native_offsets") != [-2, -1, 0]:
+                    raise ValueError(
+                        "Revo tactile jitter must use causal native offsets [-2,-1,0]"
+                    )
+                if force_required:
+                    delayed = np.asarray(
+                        sample.get("tactile_f6_delayed_jitter"), dtype=np.float32
+                    )
+                    expected = (4, 3, self.tactile_num_fingers, 6)
+                    if delayed.shape != expected:
+                        raise ValueError(
+                            f"Revo tactile_f6_delayed_jitter must be {expected}"
+                        )
+                    di = selected_delay_indexes[item_index]
+                    ji = selected_jitter_indexes[item_index]
+                    delayed_rows.append(delayed[di, ji])
+                    touch_ts = np.asarray(
+                        sample.get("touch_timestamp_ns_delayed_jitter"), dtype=np.int64
+                    )
+                    decisions = np.asarray(
+                        sample.get("tactile_decision_timestamp_ns_delayed"), dtype=np.int64
+                    )
+                    if touch_ts.shape != (4, 3) or decisions.shape != (4,):
+                        raise ValueError("Revo Force6D delay timestamps have invalid shape")
+                    if touch_ts[di, ji] > decisions[di]:
+                        raise ValueError("selected Force6D sample is from the future")
+                else:
+                    if sample.get("tactile_f6") not in (None, []):
+                        raise ValueError("DIFF-only Profile B cannot carry fake Force6D")
+            if force_required:
+                selected_tacf6 = np.stack(delayed_rows, axis=0)
+                selected_tacf6 = self._add_revo_tactile_noise(selected_tacf6)
+
         norm_tacf6 = None
         if cfg.use_tactile_vec:
-            tacf6 = np.array([x["tactile_f6"] for x in batch], dtype=np.float32)
+            tacf6 = (
+                selected_tacf6
+                if selected_tacf6 is not None
+                else np.array([x["tactile_f6"] for x in batch], dtype=np.float32)
+            )
             tacf6 = tacf6.reshape(B, -1)
             norm_tacf6 = self._normalize(tacf6, self.tacf6_mask,
                                          self.tacf6_min, self.tacf6_max)
@@ -334,10 +655,45 @@ class SftDataset(Dataset):
         deforms_tensor = None
         if cfg.use_tactile_deform:
             deforms = []
-            for x in batch:
-                imgs = [self._open_gray(p) for p in x.get("tactile_image_deform", [])]
+            for item_index, x in enumerate(batch):
+                if all(is_revo):
+                    delayed_paths = x.get("tactile_image_deform_delayed_jitter")
+                    delayed_ts = np.asarray(
+                        x.get("tactile_deform_timestamp_ns_delayed_jitter"),
+                        dtype=np.int64,
+                    )
+                    expected_ts = (4, 3, self.tactile_num_fingers)
+                    if not (
+                        isinstance(delayed_paths, list)
+                        and len(delayed_paths) == 4
+                        and all(
+                            isinstance(options, list)
+                            and len(options) == 3
+                            and all(isinstance(paths, list) and len(paths) == 5 for paths in options)
+                            for options in delayed_paths
+                        )
+                    ) or delayed_ts.shape != expected_ts:
+                        raise ValueError(
+                            "Revo Profile A/B requires delayed DIFF [4,3,5] paths/timestamps"
+                        )
+                    di = selected_delay_indexes[item_index]
+                    ji = selected_jitter_indexes[item_index]
+                    decisions = np.asarray(
+                        x.get("tactile_decision_timestamp_ns_delayed"), dtype=np.int64
+                    )
+                    if np.any(delayed_ts[di, ji] > decisions[di]):
+                        raise ValueError("selected DIFF image is from the future")
+                    paths = delayed_paths[di][ji]
+                else:
+                    paths = x.get("tactile_image_deform", [])
+                imgs = [self._open_gray(p) for p in paths]
+                if any(image.shape != (240, 240) for image in imgs):
+                    raise ValueError("each tactile DIFF input must be one [240,240] grayscale image")
                 deforms.append(imgs)
-            deforms_tensor = torch.tensor(np.array(deforms)).unsqueeze(2)
+            observed = np.asarray(deforms, dtype=np.float32)
+            if observed.shape != (B, self.tactile_num_fingers, 240, 240):
+                raise ValueError("tactile DIFF batch must be [B,5,240,240]")
+            deforms_tensor = torch.tensor(observed).unsqueeze(2)
 
         # Tactile codes: either embedded-VQ-VAE (raw F6 history, encoded in the
         # model) or pre-baked codes from the JSON (legacy).  The two are
@@ -354,8 +710,50 @@ class SftDataset(Dataset):
                 tactile_codes_tensor = torch.from_numpy(
                     np.array([x["tactile_codes"] for x in batch], dtype=np.int64))
             else:
-                hist = np.stack(
-                    [self._f6_history_for_sample(x) for x in batch], axis=0)  # [B, W, 10, 6]
+                if all(is_revo):
+                    histories = []
+                    for item_index, sample in enumerate(batch):
+                        delayed_histories = np.asarray(
+                            sample.get("tactile_f6_history_delayed_jitter"), dtype=np.float32
+                        )
+                        expected = (
+                            4, 3, self.vqvae_window, self.tactile_num_fingers, 6
+                        )
+                        if delayed_histories.shape != expected:
+                            raise ValueError(
+                                "Revo tactile_f6_history_delayed_jitter must have shape "
+                                f"{expected}, got {delayed_histories.shape}"
+                            )
+                        history_ts = np.asarray(
+                            sample.get("tactile_f6_history_timestamp_ns_delayed_jitter"),
+                            dtype=np.int64,
+                        )
+                        history_seq = np.asarray(
+                            sample.get("tactile_f6_history_sequence_delayed_jitter"),
+                            dtype=np.int64,
+                        )
+                        if history_ts.shape != (4, 3, self.vqvae_window) or history_seq.shape != (
+                            4, 3, self.vqvae_window
+                        ):
+                            raise ValueError("Revo VQ history timestamp/sequence shape mismatch")
+                        di = selected_delay_indexes[item_index]
+                        ji = selected_jitter_indexes[item_index]
+                        if np.any(np.diff(history_ts[di, ji]) <= 0) or np.any(
+                            np.diff(history_seq[di, ji]) <= 0
+                        ):
+                            raise ValueError("Revo VQ history must contain 16 distinct native samples")
+                        histories.append(
+                            delayed_histories[
+                                di,
+                                ji,
+                            ]
+                        )
+                    hist = np.stack(histories, axis=0)
+                    hist = self._add_revo_tactile_noise(hist)
+                else:
+                    hist = np.stack(
+                        [self._f6_history_for_sample(x) for x in batch], axis=0
+                    )
                 tactile_f6_history_tensor = torch.from_numpy(hist.astype(np.float32))
         elif getattr(cfg, "use_tactile_code", 0):
             codes = np.array(
@@ -368,9 +766,13 @@ class SftDataset(Dataset):
                 state_raw = np.array(x["state_fast"], dtype=np.float32)
                 state_raw = add_tracking_error_noise(state_raw,
                                                      self.te_mean, self.te_std,
-                                                     cfg.action_dim)
+                                                     cfg.action_dim,
+                                                     getattr(cfg, "tracking_error_clip_rad", None))
                 norm_state = self._normalize(state_raw, self.state_mask,
                                      self.state_min, self.state_max)
+                if (getattr(cfg, "state_dropout", 0.0) > 0
+                        and np.random.random() < float(cfg.state_dropout)):
+                    norm_state = np.zeros_like(norm_state)
                 state_raw_list.append(torch.tensor(norm_state, dtype=torch.bfloat16))
 
         all_input_ids = []
@@ -381,10 +783,13 @@ class SftDataset(Dataset):
         for x in batch:
             slow_imgs = x.get("input_image_slow", [])
             fast_imgs = x.get("input_image_fast", [])
+            if n_slow_images and n_slow_images != len(slow_imgs):
+                raise ValueError("all samples in a batch must have the same image-slot count")
             n_slow_images = len(slow_imgs)
 
-            pil_slow = [self._open(p) for p in slow_imgs]
-            pil_fast = [self._open(p) for p in fast_imgs]
+            aug_params = self._revo_augment_params(x)
+            pil_slow = [self._open_with_params(p, aug_params) for p in slow_imgs]
+            pil_fast = [self._open_with_params(p, aug_params) for p in fast_imgs]
             all_pil = pil_slow + pil_fast # a list, including all images
 
             content = []
@@ -415,12 +820,36 @@ class SftDataset(Dataset):
         if n_flare_steps > 0: # use flare
             flare_pil_imgs = []
             for x in batch:
-                for k in range(n_flare_steps):
-                    flare_images = self._load_flare_frame(x, k, n_flare_steps, flare_stride)
-                    if flare_images is None:
-                        slow_paths = x.get("input_image_slow", [])
-                        flare_images = self._open(slow_paths[0]) if slow_paths else PIL.Image.new("RGB", self.image_size or (384, 288))
-                    flare_pil_imgs.append(flare_images)
+                aug_params = self._revo_augment_params(x)
+                if x.get("schema_version") == "revo3-trex-json-v1":
+                    flare_paths = x.get("flare_image_full")
+                    flare_timestamps = x.get("flare_timestamp_ns")
+                    if not (
+                        isinstance(flare_paths, list)
+                        and len(flare_paths) == n_flare_steps
+                        and isinstance(flare_timestamps, list)
+                        and len(flare_timestamps) == n_flare_steps
+                    ):
+                        raise ValueError(
+                            "Revo FLARE requires every explicit unpadded future full frame"
+                        )
+                    for path in flare_paths:
+                        flare_pil_imgs.append(self._open_with_params(path, aug_params))
+                else:
+                    for k in range(n_flare_steps):
+                        flare_image = self._load_flare_frame(
+                            x, k, n_flare_steps, flare_stride
+                        )
+                        if flare_image is None:
+                            slow_paths = x.get("input_image_slow", [])
+                            flare_image = (
+                                self._open(slow_paths[0])
+                                if slow_paths
+                                else PIL.Image.new(
+                                    "RGB", self.image_size or (384, 288)
+                                )
+                            )
+                        flare_pil_imgs.append(flare_image)
 
             flare_inp = self.processor.image_processor(flare_pil_imgs, return_tensors="pt")
             flare_pixel_values = flare_inp.pixel_values.to(torch.bfloat16)
@@ -446,12 +875,8 @@ class SftDataset(Dataset):
 
         state_raw = torch.stack(state_raw_list) if state_raw_list else None
 
-        # Paradigm C: in post-training the JSON records don't expose frame
-        # indices for delayed tactile lookup, so we reuse the current tactile
-        # as the "delayed" input.  The asymmetry between midtrain (variable
-        # delay_k) and post-training (delay_k=0) is intentional — midtrain
-        # teaches the model to be robust to delays; post-training fine-tunes
-        # to the small in-lab set.
+        # Revo records above supply an explicitly aligned delay/history.  The
+        # current-frame fallback remains only for legacy upstream records.
         time_r = self._beta_sample(B, device_cpu)
         eps_r  = torch.randn_like(norm_actions)
 
@@ -467,10 +892,11 @@ class SftDataset(Dataset):
             "norm_actions": norm_actions,            # for L_refine residual target
             "tactile_f6s": norm_tacf6,
             "tactile_deforms": deforms_tensor,
-            "tactile_f6s_delayed": norm_tacf6,       # same as current (delay_k=0)
+            "tactile_f6s_delayed": norm_tacf6,
             "tactile_deforms_delayed": deforms_tensor,
             "tactile_codes": tactile_codes_tensor,   # [B, 2] int64 or None
-            "tactile_f6_history": tactile_f6_history_tensor,  # [B, W, 10, 6] raw or None
+            "tactile_f6_history": tactile_f6_history_tensor,
+            "tactile_delay_index": torch.from_numpy(selected_delay_indexes),
             "time_r": time_r,
             "eps_r": eps_r,
             "state_raw": state_raw,
@@ -491,7 +917,13 @@ def save_checkpoint(model, processor, accelerator, args, epoch, global_step, sta
         os.makedirs(save_dir, exist_ok=True)
 
         sd = accelerator.get_state_dict(model)
-        torch.save(sd, os.path.join(save_dir, "model.pt"))
+        model_file = os.path.join(save_dir, "model.pt")
+        torch.save(sd, model_file)
+        digest = hashlib.sha256()
+        with open(model_file, "rb") as model_handle:
+            for block in iter(lambda: model_handle.read(1024 * 1024), b""):
+                digest.update(block)
+        checkpoint_sha256 = digest.hexdigest()
 
         processor.save_pretrained(os.path.join(save_dir, "processor"))
 
@@ -504,11 +936,37 @@ def save_checkpoint(model, processor, accelerator, args, epoch, global_step, sta
                 "model_path": args.model_path,
                 "action_dim": args.action_dim,
                 "action_chunk": args.action_chunk,
+                "tactile_num_fingers": getattr(args, "tactile_num_fingers", 10),
                 "use_robot_state": args.use_robot_state,
                 "use_tactile_deform": args.use_tactile_deform,
                 "use_tactile_vec": getattr(args, "use_tactile_vec", 0),
                 "tactile_intermediate_size": getattr(args, "tactile_intermediate_size", 0),
                 "training_stage": args.training_stage,
+                "revo_training_stage": getattr(args, "revo_training_stage", "off"),
+                "tactile_profile": getattr(args, "tactile_profile", ""),
+                "checkpoint_family_id": getattr(args, "checkpoint_family_id", ""),
+                "normalization_family_id": getattr(args, "normalization_family_id", ""),
+                "resume_kind": getattr(args, "resume_source", ""),
+                "source_checkpoint_sha256": getattr(args, "source_checkpoint_sha256", ""),
+                "split_manifest_sha256": getattr(args, "split_manifest_sha256", ""),
+                "tactile_profile_manifest_sha256": getattr(args, "tactile_profile_manifest_sha256", ""),
+                "normalization_statistics_sha256": getattr(
+                    args, "normalization_statistics_sha256", ""
+                ),
+                "normalization_artifact_sha256": getattr(
+                    args, "normalization_artifact_sha256", ""
+                ),
+                "capability_manifest_sha256": getattr(args, "capability_manifest_sha256", ""),
+                "vqvae_artifact_sha256": artifact_sha256_file(args.vqvae_artifact)
+                if getattr(args, "vqvae_artifact", "") else "",
+                "deform_encoder_artifact_sha256": artifact_sha256_file(
+                    args.deform_encoder_artifact
+                ) if getattr(args, "deform_encoder_artifact", "") else "",
+                "camera_profile": "revo3_full_center_v1" if getattr(args, "revo_training_stage", "off") != "off" else "official_single_view",
+                "view_slots": {"slow": "full", "fast": "fixed_center"} if getattr(args, "revo_training_stage", "off") != "off" else None,
+                "state_dropout": getattr(args, "state_dropout", 0.0),
+                "tracking_error_clip_rad": getattr(args, "tracking_error_clip_rad", None),
+                "max_steps": getattr(args, "max_steps", 0),
                 "use_flare": args.use_flare,
                 "n_flare_tokens_per_frame": args.n_flare_tokens_per_frame,
                 "n_flare_steps": args.n_flare_steps,
@@ -521,10 +979,64 @@ def save_checkpoint(model, processor, accelerator, args, epoch, global_step, sta
                 "cascaded_total_steps": getattr(args, "cascaded_total_steps", 10),
                 "cascaded_split_step":  getattr(args, "cascaded_split_step", 6),
                 "flare_frame_stride": getattr(args, "flare_frame_stride", 2),
+                "revo_image_augmentation": getattr(args, "revo_image_augmentation", 0),
+                "revo_tactile_noise_augmentation": getattr(
+                    args, "revo_tactile_noise_augmentation", 0
+                ),
+                "augmentation_seed": getattr(args, "augmentation_seed", 42),
             }, f, indent=2)
 
         with open(os.path.join(save_dir, "stats_data.json"), "w") as f:
             json.dump(stats_data, f, indent=2)
+
+        if getattr(args, "revo_training_stage", "off") != "off":
+            with open(
+                os.path.join(save_dir, "checkpoint_lineage.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump(
+                    {
+                        "schema_version": "revo3-checkpoint-lineage-v1",
+                        "checkpoint_sha256": checkpoint_sha256,
+                        "stage": args.revo_training_stage,
+                        "resume_kind": args.resume_source,
+                        "parent_checkpoint_sha256": getattr(
+                            args, "source_checkpoint_sha256", ""
+                        ),
+                        "split_manifest_sha256": getattr(
+                            args, "split_manifest_sha256", ""
+                        ),
+                        "tactile_profile_manifest_sha256": getattr(
+                            args, "tactile_profile_manifest_sha256", ""
+                        ),
+                        "normalization_statistics_sha256": getattr(
+                            args, "normalization_statistics_sha256", ""
+                        ),
+                        "normalization_artifact_sha256": getattr(
+                            args, "normalization_artifact_sha256", ""
+                        ),
+                        "capability_manifest_sha256": getattr(
+                            args, "capability_manifest_sha256", ""
+                        ),
+                        "vqvae_artifact_sha256": artifact_sha256_file(
+                            args.vqvae_artifact
+                        ) if getattr(args, "vqvae_artifact", "") else "",
+                        "deform_encoder_artifact_sha256": artifact_sha256_file(
+                            args.deform_encoder_artifact
+                        ) if getattr(args, "deform_encoder_artifact", "") else "",
+                        "action_dim": args.action_dim,
+                        "action_chunk": args.action_chunk,
+                        "joint_order_hash": JOINT_ORDER_HASH,
+                        "camera_profile": "revo3_full_center_v1",
+                        "view_slots": {"slow": "full", "fast": "fixed_center"},
+                        "tactile_profile": args.tactile_profile,
+                        "checkpoint_family_id": args.checkpoint_family_id,
+                        "normalization_family_id": args.normalization_family_id,
+                    },
+                    handle,
+                    indent=2,
+                )
 
     accelerator.wait_for_everyone()
     logger.info(f"Checkpoint {epoch}-{global_step} saved.")
@@ -745,6 +1257,25 @@ def train(args):
 
     tac_isize = args.tactile_intermediate_size if args.tactile_intermediate_size > 0 else None
 
+    if args.revo_training_stage != "off" and args.revo_training_stage != "w0":
+        artifact_expected = {
+            "tactile_profile": args.tactile_profile,
+            "checkpoint_family_id": args.checkpoint_family_id,
+            "normalization_family_id": args.normalization_family_id,
+            "capability_manifest_sha256": args.capability_manifest_sha256,
+            "split_manifest_sha256": args.split_manifest_sha256,
+        }
+        if args.use_tactile_vqvae:
+            validate_revo_vqvae_artifact(
+                args.vqvae_ckpt, args.vqvae_artifact, **artifact_expected
+            )
+        if args.use_tactile_deform:
+            validate_revo_deform_artifact(
+                args.deform_encoder_ckpt,
+                args.deform_encoder_artifact,
+                **artifact_expected,
+            )
+
     # Embedded VQ-VAE: tactile codes are encoded on-the-fly inside the model.
     # Enabled either explicitly (--use_tactile_vqvae 1 [--vqvae_ckpt ...]) or
     # AUTOMATICALLY when resuming a checkpoint merged with an embedded VQ-VAE
@@ -785,6 +1316,7 @@ def train(args):
         pretrained_path=args.model_path,
         action_dim=args.action_dim,
         action_chunk=args.action_chunk,
+        tactile_num_fingers=args.tactile_num_fingers,
         use_tactile_deform=bool(args.use_tactile_deform),
         use_robot_state=bool(args.use_robot_state),
         torch_dtype=torch.bfloat16,
@@ -828,21 +1360,55 @@ def train(args):
         resume_sd = torch.load(ckpt_path, map_location="cpu")
         if "state_dict" in resume_sd:
             resume_sd = resume_sd["state_dict"]
-        # Filter out keys with shape mismatch (e.g. tactile MLP from pretrain)
-        model_sd = model.state_dict()
-        filtered_sd = {}
-        skipped = []
-        for k, v in resume_sd.items():
-            if k in model_sd and model_sd[k].shape != v.shape:
-                skipped.append(k)
-            else:
-                filtered_sd[k] = v
-        if skipped:
-            accelerator.print(f"Skipped {len(skipped)} keys with shape mismatch (e.g. {skipped[0]})")
-        missing, unexpected = model.load_state_dict(filtered_sd, strict=False)
-        accelerator.print(f"Resumed: missing={len(missing)}, unexpected={len(unexpected)}")
+        if args.revo_training_stage != "off":
+            report = load_revo_compatible_state_dict(
+                model,
+                resume_sd,
+                migration_kind=args.resume_source,
+                raise_on_error=True,
+            )
+            accelerator.print(
+                "Revo checkpoint migration: "
+                f"loaded={len(report.loaded)}, "
+                f"declared_reinitialized={len(report.reinitialized_dimension_bound) + len(report.declared_missing_reinitialized)}, "
+                "unexpected_missing=0, unexpected_mismatch=0, unexpected_source=0"
+            )
+            if accelerator.is_main_process:
+                os.makedirs(args.output_dir, exist_ok=True)
+                with open(
+                    os.path.join(args.output_dir, "checkpoint_migration_report.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
+                    json.dump(
+                        {
+                            "schema_version": "revo3-checkpoint-migration-v1",
+                            "migration_kind": args.resume_source,
+                            "loaded": list(report.loaded),
+                            "reinitialized_dimension_bound": list(
+                                report.reinitialized_dimension_bound
+                            ),
+                            "declared_missing_reinitialized": list(
+                                report.declared_missing_reinitialized
+                            ),
+                            "unexpected_shape_mismatch": list(
+                                report.unexpected_shape_mismatch
+                            ),
+                            "unexpected_source": list(report.unexpected_source),
+                            "unexpected_missing_target": list(
+                                report.unexpected_missing_target
+                            ),
+                        },
+                        handle,
+                        indent=2,
+                    )
+        else:
+            missing, unexpected = model.load_state_dict(resume_sd, strict=False)
+            accelerator.print(f"Legacy resume: missing={len(missing)}, unexpected={len(unexpected)}")
 
-    resumed_tactile = bool(args.resume_checkpoint) and args.resume_source == "midtrain"
+    resumed_tactile = bool(args.resume_checkpoint) and args.resume_source in {
+        "revo_w1", "revo_midtrain", "revo_sft", "official_midtrain_ablation"
+    }
     if not freeze_tactile and not resumed_tactile:
         # Tactile expert is a velocity predictor under cascaded flow matching,
         # so the head must start non-trivial (no final-layer zero-init here).
@@ -856,14 +1422,49 @@ def train(args):
     elif resumed_tactile:
         accelerator.print("Tactile expert weights kept from resumed midtrain checkpoint.")
 
-    for name, param in model.named_parameters():
-        if (name.startswith("visual") or name.startswith("deform_encoder")
-                or name.startswith("tactile_vqvae")):
-            param.requires_grad = False   # embedded VQ-VAE stays frozen
-        elif "_tactile" in name or "final_layer_tactile" in name:
-            param.requires_grad = (not freeze_tactile)
-        else:
-            param.requires_grad = True
+    revo_named_groups = None
+    if args.revo_training_stage != "off":
+        spec = revo_stage_spec(args.revo_training_stage)
+        reviewed = {
+            "max_steps": (args.max_steps, spec.max_steps),
+            "n_epochs": (args.n_epochs, spec.max_epochs),
+            "cascaded_tactile_dropout": (
+                args.cascaded_tactile_dropout,
+                spec.tactile_dropout,
+            ),
+            "state_dropout": (args.state_dropout, spec.state_dropout),
+            "flare_loss_weight": (args.flare_loss_weight, spec.flare_loss_weight),
+        }
+        mismatches = {
+            name: (expected, observed)
+            for name, (observed, expected) in reviewed.items()
+            if not math.isclose(float(observed), float(expected), rel_tol=0.0, abs_tol=1e-12)
+        }
+        if bool(args.use_flare) != spec.flare_enabled:
+            mismatches["use_flare"] = (spec.flare_enabled, bool(args.use_flare))
+        if mismatches:
+            raise ValueError(f"Revo stage contract mismatch: {mismatches}")
+        actual_effective_batch = (
+            int(args.train_bsz_per_gpu)
+            * int(dist.get_world_size())
+            * int(accelerator.gradient_accumulation_steps)
+        )
+        if actual_effective_batch != spec.effective_batch:
+            raise ValueError(
+                f"Revo effective batch={actual_effective_batch}; expected {spec.effective_batch}"
+            )
+        revo_named_groups = configure_revo_trainable_parameters(
+            model, args.revo_training_stage
+        )
+    else:
+        for name, param in model.named_parameters():
+            if (name.startswith("visual") or name.startswith("deform_encoder")
+                    or name.startswith("tactile_vqvae")):
+                param.requires_grad = False   # embedded VQ-VAE stays frozen
+            elif "_tactile" in name or "final_layer_tactile" in name:
+                param.requires_grad = (not freeze_tactile)
+            else:
+                param.requires_grad = True
 
     # Keep the embedded VQ-VAE in eval + fp32 so on-the-fly codes match the
     # standalone tokenizer (no EMA drift, full-precision normalization).
@@ -876,15 +1477,22 @@ def train(args):
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     accelerator.print(f"Model: {total/1e6:.1f}M total, {trainable/1e6:.1f}M trainable")
 
-    no_decay = ["bias", "norm.weight", "q_norm.weight", "k_norm.weight"]
-    param_groups = [
-        {"params": [p for n, p in model.named_parameters()
-                    if p.requires_grad and not any(nd in n for nd in no_decay)],
-         "weight_decay": args.weight_decay},
-        {"params": [p for n, p in model.named_parameters()
-                    if p.requires_grad and any(nd in n for nd in no_decay)],
-         "weight_decay": 0.0},
-    ]
+    if revo_named_groups is not None:
+        param_groups = build_revo_optimizer_groups(
+            revo_named_groups,
+            args.revo_training_stage,
+            weight_decay=args.weight_decay,
+        )
+    else:
+        no_decay = ["bias", "norm.weight", "q_norm.weight", "k_norm.weight"]
+        param_groups = [
+            {"params": [p for n, p in model.named_parameters()
+                        if p.requires_grad and not any(nd in n for nd in no_decay)],
+             "weight_decay": args.weight_decay},
+            {"params": [p for n, p in model.named_parameters()
+                        if p.requires_grad and any(nd in n for nd in no_decay)],
+             "weight_decay": 0.0},
+        ]
     optimizer = torch.optim.AdamW(param_groups, lr=args.learning_rate)
 
     if getattr(args, "data_format", "json") == "lerobot":
@@ -894,7 +1502,21 @@ def train(args):
         dataset = SftDataset(args, processor, accelerator)
 
     val_dataloader = None
-    if getattr(args, "val_ratio", 0) > 0:
+    if getattr(args, "val_data_path", ""):
+        val_args = copy.copy(args)
+        val_args.data_path = args.val_data_path
+        val_args.stats_path = args.val_stats_path or args.stats_path
+        val_dataset = SftDataset(val_args, processor, accelerator, training=False)
+        val_dataloader = DataLoader(
+            val_dataset, batch_size=args.train_bsz_per_gpu, shuffle=False,
+            drop_last=False, collate_fn=val_dataset.collate_fn,
+            num_workers=2, pin_memory=True)
+    elif getattr(args, "val_ratio", 0) > 0:
+        if args.revo_training_stage != "off":
+            raise ValueError(
+                "Revo training forbids post-stat random validation splits; pass an explicit "
+                "manifest-derived --val_data_path development split"
+            )
         val_dataset = dataset.create_val_split(
             val_ratio=args.val_ratio, seed=args.seed)
         val_dataloader = DataLoader(
@@ -912,6 +1534,8 @@ def train(args):
         // accelerator.gradient_accumulation_steps
         // dist.get_world_size()
     )
+    if args.max_steps > 0:
+        num_training_steps = min(num_training_steps, int(args.max_steps))
     lr_scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=int(args.warmup_rates * num_training_steps),
@@ -927,6 +1551,7 @@ def train(args):
 
     metric = TrainingMetrics(device=torch.cuda.current_device())
     global_step = 0
+    optimizer_step = 0
     T_per_frame = args.n_flare_tokens_per_frame
     S_steps = args.n_flare_steps
     K = T_per_frame * S_steps  # total flare tokens
@@ -940,6 +1565,8 @@ def train(args):
               if accelerator.is_main_process else dataloader)
 
         for batch in it:
+            if args.max_steps > 0 and optimizer_step >= args.max_steps:
+                break
             raw_model = accelerator.unwrap_model(model)
 
             inputs_embeds = raw_model.prepare_inputs_embeds(
@@ -1181,6 +1808,7 @@ def train(args):
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
+                optimizer_step += 1
 
                 m = metric.get_metric()
                 if accelerator.is_main_process:
@@ -1223,6 +1851,8 @@ def train(args):
             accelerator.wait_for_everyone()
             save_checkpoint(model, processor, accelerator, args,
                             epoch, global_step, dataset.stats_data)
+        if args.max_steps > 0 and optimizer_step >= args.max_steps:
+            break
 
 
 if __name__ == "__main__":
@@ -1232,6 +1862,9 @@ if __name__ == "__main__":
     parser.add_argument("--run_name", type=str, default="run_1")
     parser.add_argument("--model_path", type=str, required=True)
     parser.add_argument("--data_path", type=str, default="")
+    parser.add_argument("--val_data_path", type=str, default="")
+    parser.add_argument("--stats_path", type=str, default="")
+    parser.add_argument("--val_stats_path", type=str, default="")
     parser.add_argument("--data_root", type=str, default="")
     # Data source: legacy JSON (default) or a LeRobot v3.0 dataset directory.
     parser.add_argument("--data_format", type=str, default="json", choices=["json", "lerobot"])
@@ -1242,6 +1875,8 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="./outputs")
     parser.add_argument("--log_dir", type=str, default="./logs")
     parser.add_argument("--max_ckpts", type=int, default=10)
+    parser.add_argument("--max_steps", type=int, default=0,
+                        help="Maximum optimizer steps; 0 uses the epoch-derived limit")
 
     parser.add_argument("--n_epochs", type=int, default=200)
     parser.add_argument("--save_freq", type=int, default=50)
@@ -1256,19 +1891,55 @@ if __name__ == "__main__":
 
     parser.add_argument("--action_dim", type=int, default=31)
     parser.add_argument("--action_chunk", type=int, default=8)
+    parser.add_argument(
+        "--tactile_num_fingers", type=int, default=10,
+        help="Number of tactile fingertip feature streams. Upstream T-Rex=10; Revo3 single hand=5.",
+    )
     parser.add_argument("--use_robot_state", type=int, default=0)
     parser.add_argument("--use_tactile_vec", type=int, default=0)
     parser.add_argument("--use_tactile_deform", type=int, default=1)
     parser.add_argument("--deform_encoder_ckpt", type=str, default="")
+    parser.add_argument("--deform_encoder_artifact", type=str, default="")
     parser.add_argument("--tactile_intermediate_size", type=int, default=0)
     parser.add_argument("--training_stage", type=int, default=2, choices=[1, 2])
+    parser.add_argument(
+        "--revo_training_stage",
+        type=str,
+        default="off",
+        choices=["off", "w0", "w1", "midtrain", "sft"],
+        help="Apply the frozen Revo parameter/optimizer-group policy",
+    )
+    parser.add_argument("--tactile_profile", type=str, default="")
+    parser.add_argument("--checkpoint_family_id", type=str, default="")
+    parser.add_argument("--normalization_family_id", type=str, default="")
+    parser.add_argument("--source_checkpoint_sha256", type=str, default="")
+    parser.add_argument("--split_manifest_sha256", type=str, default="")
+    parser.add_argument("--tactile_profile_manifest_sha256", type=str, default="")
+    parser.add_argument("--normalization_statistics_sha256", type=str, default="")
+    parser.add_argument("--normalization_artifact_sha256", type=str, default="")
+    parser.add_argument("--capability_manifest_sha256", type=str, default="")
     parser.add_argument("--resume_checkpoint", type=str, default="")
-    parser.add_argument("--resume_source", type=str, default="pretrain",
-                        choices=["pretrain", "midtrain"],
-                        help="'pretrain': resumed ckpt did not train tactile (re-init); "
-                             "'midtrain': resumed ckpt already trained tactile (keep).")
+    parser.add_argument(
+        "--resume_source",
+        type=str,
+        default="official_pretrain",
+        choices=[
+            "official_pretrain",
+            "official_midtrain_ablation",
+            "revo_w0",
+            "revo_w1",
+            "revo_midtrain",
+            "revo_sft",
+        ],
+        help="Explicit checkpoint lineage; only declared adjacent-stage rebuilds are allowed.",
+    )
     parser.add_argument("--tactile_loss_weight", type=float, default=1.0)
+    parser.add_argument("--state_dropout", type=float, default=0.0)
+    parser.add_argument("--tracking_error_clip_rad", type=float, default=None)
     parser.add_argument("--image_size", type=int, nargs=2, default=None, metavar=("W", "H"))
+    parser.add_argument("--revo_image_augmentation", type=int, default=0)
+    parser.add_argument("--revo_tactile_noise_augmentation", type=int, default=0)
+    parser.add_argument("--augmentation_seed", type=int, default=42)
 
     # Cascaded flow matching — action expert handles τ ∈ [τ_split, 1], tactile
     # expert handles τ ∈ [0, τ_split].  Both predict velocity for the same
@@ -1309,6 +1980,7 @@ if __name__ == "__main__":
     parser.add_argument("--vqvae_ckpt", type=str, default="",
                         help="Standalone VQ-VAE checkpoint (config/model_state/stats) "
                              "to load into the embedded module.")
+    parser.add_argument("--vqvae_artifact", type=str, default="")
 
     # Flare
     parser.add_argument("--use_flare", type=int, default=1, help="Enable flare visual prediction for latent expert.")

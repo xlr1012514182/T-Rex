@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/xlr1012514182/T-Rex/config/revo3_v1_hardware_calibration.schema.json",
+  "title": "Revo3 V1 production hardware calibration",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "joint_order_hash",
+    "tactile_profile_hash",
+    "compatible_policy_tactile_profile_manifest_sha256",
+    "safety",
+    "completion"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "revo3-v1-hardware-calibration-v1"
+    },
+    "example_only": {
+      "type": "boolean"
+    },
+    "joint_order_hash": {
+      "$ref": "#/$defs/sha256"
+    },
+    "tactile_profile_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "compatible_policy_tactile_profile_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "safety": {
+      "type": "object",
+      "required": [
+        "q_min_rad",
+        "q_max_rad",
+        "max_step_rad",
+        "max_abs_current_a",
+        "max_abs_velocity_rad_s",
+        "max_abs_acceleration_rad_s2",
+        "max_temperature_c",
+        "hardware_profile_id"
+      ],
+      "properties": {
+        "q_min_rad": { "$ref": "#/$defs/vector21" },
+        "q_max_rad": { "$ref": "#/$defs/vector21" },
+        "max_step_rad": { "$ref": "#/$defs/vector21" },
+        "max_abs_current_a": { "$ref": "#/$defs/vector21" },
+        "max_abs_velocity_rad_s": { "$ref": "#/$defs/vector21" },
+        "max_abs_acceleration_rad_s2": { "$ref": "#/$defs/vector21" },
+        "max_temperature_c": { "$ref": "#/$defs/vector21" },
+        "hardware_profile_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "completion": {
+      "type": "object",
+      "required": [
+        "contact_force_threshold",
+        "release_force_threshold",
+        "safe_open_q_rad",
+        "calibration_id"
+      ],
+      "properties": {
+        "contact_force_threshold": { "$ref": "#/$defs/vector5" },
+        "release_force_threshold": { "$ref": "#/$defs/vector5" },
+        "safe_open_q_rad": { "$ref": "#/$defs/vector21" },
+        "calibration_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "cair": {
+      "type": "object"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "vector5": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "items": { "type": "number" }
+    },
+    "vector21": {
+      "type": "array",
+      "minItems": 21,
+      "maxItems": 21,
+      "items": { "type": "number" }
+    }
+  }
+}

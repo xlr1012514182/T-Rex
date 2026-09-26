@@ -1,0 +1,26 @@
+{
+  "schema_version": "revo3-v1-hardware-calibration-v1",
+  "example_only": true,
+  "joint_order_hash": "659198b4ae6f2627e0bdd5c16a3be5c28e246ae93669d49077fb9b48b16bff7f",
+  "tactile_profile_hash": "REPLACE_WITH_CALIBRATED_SENSOR_PROFILE_HASH",
+  "compatible_policy_tactile_profile_manifest_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "safety": {
+    "q_min_rad": [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1],
+    "q_max_rad": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "max_step_rad": [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01],
+    "max_abs_current_a": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "max_abs_velocity_rad_s": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    "max_abs_acceleration_rad_s2": [5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5],
+    "max_temperature_c": [45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45, 45],
+    "hardware_profile_id": "REPLACE_WITH_BENCH_CALIBRATION_ID"
+  },
+  "completion": {
+    "contact_force_threshold": [0.1, 0.1, 0.1, 0.1, 0.1],
+    "release_force_threshold": [0.03, 0.03, 0.03, 0.03, 0.03],
+    "safe_open_q_rad": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    "calibration_id": "REPLACE_WITH_COMPLETION_CALIBRATION_ID"
+  },
+  "cair": {
+    "enabled": false
+  }
+}

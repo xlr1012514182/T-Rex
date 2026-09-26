@@ -1,0 +1,8 @@
+# Portable shell entry points and text normalization.
+* text=auto
+*.sh text eol=lf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.stl binary
+*.STEP binary

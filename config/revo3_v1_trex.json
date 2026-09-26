@@ -1,0 +1,228 @@
+{
+  "schema_version": "revo3-trex-launch-v1",
+  "description": "Fail-fast launch contract for the Revo3 single-hand T-Rex adaptation. This is a Revo-specific cascaded stage-2 run, not a claim that the released T-Rex paper midtrain corpus or protocol was reproduced.",
+  "official_sources": {
+    "main_repository": "https://github.com/ZhuoyangLiu2005/T-Rex",
+    "full_pipeline_branch": "https://github.com/ZhuoyangLiu2005/T-Rex/tree/full-pipeline",
+    "base_model": "https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct",
+    "primary_pretrain_checkpoint_id": "miniFranka/T-Rex_pretrain_mecka22k_epoch1",
+    "primary_pretrain_checkpoint": "https://huggingface.co/miniFranka/T-Rex_pretrain_mecka22k_epoch1",
+    "midtrain_ablation_checkpoint_id": "miniFranka/T-Rex_midtrain_mecka23k_ucb100_vqvae_epoch6",
+    "midtrain_ablation_checkpoint": "https://huggingface.co/miniFranka/T-Rex_midtrain_mecka23k_ucb100_vqvae_epoch6"
+  },
+  "fixed_contract": {
+    "action_dim": 21,
+    "action_chunk": 16,
+    "tactile_num_fingers": 5,
+    "use_robot_state": 1,
+    "emg_in_vla": false
+  },
+  "default_tactile_profile": "profile_a_force6d_diff",
+  "tactile_profiles": {
+    "profile_a_force6d_diff": {
+      "use_tactile_vec": 1,
+      "use_tactile_deform": 1,
+      "use_tactile_vqvae": 1,
+      "use_tactile_code": 1,
+      "history_shape": [16, 5, 6],
+      "deform_shape": [5, 1, 240, 240],
+      "ablation_only": false
+    },
+    "profile_b_diff_only": {
+      "use_tactile_vec": 0,
+      "use_tactile_deform": 1,
+      "use_tactile_vqvae": 0,
+      "use_tactile_code": 0,
+      "history_shape": null,
+      "deform_shape": [5, 1, 240, 240],
+      "ablation_only": false
+    },
+    "profile_c_pressure_matrix": {
+      "use_tactile_vec": 0,
+      "use_tactile_deform": 0,
+      "use_tactile_vqvae": 0,
+      "use_tactile_code": 0,
+      "history_shape": null,
+      "deform_shape": null,
+      "launchable_by_current_trainer": false,
+      "ablation_only": false
+    },
+    "ablation_force6d_only": {
+      "use_tactile_vec": 1,
+      "use_tactile_deform": 0,
+      "use_tactile_vqvae": 0,
+      "use_tactile_code": 0,
+      "history_shape": [16, 5, 6],
+      "deform_shape": null,
+      "ablation_only": true
+    }
+  },
+  "training": {
+    "n_epochs": 3,
+    "save_freq": 2,
+    "train_bsz_per_gpu": 8,
+    "gradient_accumulation_steps": 1,
+    "effective_batch": 64,
+    "max_steps": 22000,
+    "learning_rate": 0.0001,
+    "min_lr_ratio": 0.0,
+    "warmup_rates": 0.03,
+    "weight_decay": 0.01,
+    "max_grad_norm": 1.0,
+    "seed": 42,
+    "training_stage": 2,
+    "tactile_intermediate_size": 1536,
+    "cascaded_total_steps": 10,
+    "cascaded_split_step": 6,
+    "cascaded_tactile_dropout": 0.1,
+    "cascaded_loss_weight": 1.0,
+    "tactile_loss_weight": 1.0,
+    "state_dropout": 0.05,
+    "tracking_error_clip_rad": 0.008726646259971648,
+    "use_flare": 1,
+    "n_flare_tokens_per_frame": 4,
+    "n_flare_steps": 8,
+    "flare_loss_weight": 0.5,
+    "flare_frame_stride": 4,
+    "flare_layer_index": -1,
+    "image_size": [384, 288],
+    "revo_image_augmentation": 1,
+    "revo_tactile_noise_augmentation": 1,
+    "augmentation_seed": 42,
+    "image_augmentation_contract": {
+      "brightness": 0.2,
+      "contrast": 0.15,
+      "saturation": 0.1,
+      "hue": 0.03,
+      "rotation_deg": 3.0,
+      "translation_fraction": 0.03,
+      "horizontal_flip": false,
+      "random_crop": false,
+      "shared_full_center_parameters": true,
+      "validation_enabled": false
+    },
+    "val_ratio": 0.0,
+    "val_freq": 500,
+    "max_val_batches": 30,
+    "stages": {
+      "w0": {
+        "max_steps": 1000,
+        "n_epochs": 3,
+        "training_stage": 1,
+        "use_flare": 0,
+        "n_flare_tokens_per_frame": 0,
+        "n_flare_steps": 0,
+        "flare_loss_weight": 0.0,
+        "cascaded_tactile_dropout": 0.0
+      },
+      "w1": {
+        "max_steps": 1500,
+        "n_epochs": 3,
+        "training_stage": 2,
+        "use_flare": 0,
+        "n_flare_tokens_per_frame": 0,
+        "n_flare_steps": 0,
+        "flare_loss_weight": 0.0
+      },
+      "midtrain": {
+        "max_steps": 22000,
+        "n_epochs": 3,
+        "training_stage": 2,
+        "use_flare": 1,
+        "n_flare_tokens_per_frame": 4,
+        "n_flare_steps": 8,
+        "flare_loss_weight": 0.5
+      },
+      "sft": {
+        "max_steps": 6500,
+        "n_epochs": 3,
+        "training_stage": 2,
+        "use_flare": 1,
+        "n_flare_tokens_per_frame": 4,
+        "n_flare_steps": 8,
+        "flare_loss_weight": 0.5
+      }
+    }
+  },
+  "inference": {
+    "cascaded_total_steps": 10,
+    "cascaded_split_step": 6,
+    "disable_tactile": 0,
+    "image_size": [384, 288],
+    "camera_profile": "revo3_full_center_v1",
+    "policy_hz": 30,
+    "chunk_size": 16,
+    "execute_steps_per_chunk": 16,
+    "initial_request": "slow_and_fast",
+    "refine_offsets": [4, 8, 12],
+    "temporal_aggregation": true,
+    "temporal_agg_k": 0.0,
+    "max_tactile_age_ms": 150,
+    "policy_worker_timeout_ms": 2000,
+    "slow_response_observation_budget_ms": 1500,
+    "fast_response_observation_budget_ms": 500,
+    "task_lease_ttl_ms": 3000,
+    "online_diff_contract": "current_five_fingers_only",
+    "server_identity_contract": {
+      "schema_version": "revo3-trex-server-identity-v1",
+      "probe_mode": "identity",
+      "response_field": "server_identity",
+      "validate_on_every_response": true,
+      "runtime_policy_revision_source": "verified_server_identity.identity_sha256",
+      "required_artifact": "policy_server_identity_manifest"
+    }
+  },
+  "vision_runtime": {
+    "physical_camera_count": 1,
+    "source_requires_rectified_rgb": true,
+    "derived_views": ["full", "fixed_center"],
+    "views_share_capture_timestamp": true,
+    "center_crop_xyxy": [0.2, 0.2, 0.8, 0.8],
+    "image_size": [384, 288],
+    "detector": false,
+    "sam": false,
+    "tracker": false,
+    "calibration_hash": "REQUIRED_FROM_CAMERA_CAPABILITY_PROBE"
+  },
+  "servo_runtime": {
+    "executor_hz": 100,
+    "policy_grid_hz": 30,
+    "interpolation": "linear",
+    "fresh_telemetry_each_tick": true,
+    "single_motor_writer": "RevoCommandPipeline"
+  },
+  "cair_runtime": {
+    "enabled_until_calibrated": false,
+    "update_hz_initial": 12,
+    "max_abs_step_rad": 0.003,
+    "max_abs_cumulative_rad": 0.035,
+    "load_relief_enabled": false,
+    "max_tactile_age_ms": 150,
+    "role": "bounded_synergy_residual_only"
+  },
+  "completion_runtime": {
+    "min_contact_fingers": 2,
+    "contact_dwell_ms": 100,
+    "stable_dwell_ms": 400,
+    "no_progress_timeout_ms": 2000,
+    "stable_grasp_is_hold_not_complete": true,
+    "explicit_controlled_release_required": true,
+    "calibration_id": "REQUIRED_FROM_BENCH_CALIBRATION"
+  },
+  "safety_runtime": {
+    "hardware_write_enabled": false,
+    "hardware_profile_id": "REQUIRED_FROM_BENCH_CALIBRATION",
+    "max_abs_velocity_rad_s": null,
+    "max_abs_current_a": null,
+    "max_temperature_c": null,
+    "policy_abort_opens_hand": false
+  },
+  "limitations": [
+    "Execution requires an independently approved real-robot dataset readiness manifest; synthetic fixtures are rejected.",
+    "The VLA dataset and model contract contain RGB, language, Revo3 state/action, and tactile features only. EMG remains outside T-Rex.",
+    "The current main-branch LeRobot converter is upstream-bimanual (62-D); this launcher accepts the reviewed Revo3 JSON contract with manifest-derived splits, true timestamps, dual views and 21-D labels.",
+    "Profile A requires a from-scratch five-finger Revo Force6D VQ-VAE and Revo DIFF encoder; Profile B is DIFF-only; Force6D-only is an acknowledged ablation.",
+    "The raw released midtrain checkpoint is rejected even in ablation mode. The ablation becomes launchable only after a separately verified Revo3 migration artifact removes the 10-finger embedded VQ path and records all reinitialized shape-mismatched heads.",
+    "FLARE is enabled at loss weight 0.5 only when all eight explicit stride-4 future frames exist; missing futures reject the anchor rather than padding."
+  ]
+}

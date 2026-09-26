@@ -1,0 +1,2 @@
+# Compatibility alias. New setup instructions use requirements-dev.txt.
+-r requirements-dev.txt

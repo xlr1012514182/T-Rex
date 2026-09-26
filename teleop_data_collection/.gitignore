@@ -1,0 +1,6 @@
+/vendor/
+/outputs/
+/.pytest_cache/
+/**/__pycache__/
+*.pyc
+*.inprogress

@@ -1,0 +1,18 @@
+{
+  "schema_version": "revo3-teleop-config-v1",
+  "mode": "mock",
+  "output_root": "outputs/mock_collection",
+  "duration_s": 0.5,
+  "anchor_hz": 30,
+  "rates_hz": {
+    "camera": 30,
+    "revo_state": 100,
+    "tactile": 120,
+    "glove": 120,
+    "emg_packets": 12.5,
+    "tianji_state": 100,
+    "revo_command": 30
+  },
+  "tasks": ["bottle", "phone", "plastic_bag", "refrigerator_door"],
+  "allow_hardware_write": false
+}
